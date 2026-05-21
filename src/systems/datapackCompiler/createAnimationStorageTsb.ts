@@ -279,7 +279,7 @@ function buildLocatorFramesObj(
 
 function buildForceLoad(expandRefs: string[]): string {
 	if (expandRefs.length === 0) return '\n'
-	return expandRefs.map(r => `function ${r} with {_: ""}`).join('\n') + '\n'
+	return expandRefs.map(r => `function ${r} {_: ""}`).join('\n') + '\n'
 }
 
 function buildVariantsExpand(
@@ -367,7 +367,7 @@ function buildPop(
 }
 
 function buildDispatch(): string {
-	return `$function $(pop) with {_: ""}\n`
+	return `$function $(pop) {_: ""}\n`
 }
 
 function formatTsbFloat(n: number, digits: number): string {
