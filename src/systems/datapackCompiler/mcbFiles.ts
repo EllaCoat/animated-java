@@ -3,6 +3,11 @@ import GLOBAL_1_20_4 from './1.20.4/global.mcb'
 import GLOBAL_TEMPLATES_1_20_4 from './1.20.4/global.mcbt'
 import MAIN_1_20_4 from './1.20.4/main.mcb'
 
+// TSB optimized variant (forked from 1.20.4/, customized in Phase B-2)
+import GLOBAL_1_20_4_TSB from './1.20.4-tsb/global.mcb'
+import GLOBAL_TEMPLATES_1_20_4_TSB from './1.20.4-tsb/global.mcbt'
+import MAIN_1_20_4_TSB from './1.20.4-tsb/main.mcb'
+
 import MAIN_1_20_5 from './1.20.5/main.mcb'
 
 import GLOBAL_1_21_0 from './1.21.0/global.mcb'
@@ -26,7 +31,23 @@ interface MCBFiles {
 	globalTemplates: string
 }
 
-export function getMCBFilesByVersion(version: string): MCBFiles {
+export function getMCBFilesByVersion(version: string, tsbOptimized: boolean = false): MCBFiles {
+	if (tsbOptimized) {
+		// TSB Optimized Export is only supported on Minecraft 1.20.4.
+		// Other target versions must disable tsb_optimized_export.
+		if (version !== '1.20.4') {
+			throw new Error(
+				`TSB Optimized Export only supports Minecraft 1.20.4 (got "${version}"). ` +
+					`Either change target_minecraft_version to 1.20.4, or disable tsb_optimized_export.`,
+			)
+		}
+		return {
+			main: MAIN_1_20_4_TSB,
+			global: GLOBAL_1_20_4_TSB,
+			globalTemplates: GLOBAL_TEMPLATES_1_20_4_TSB,
+		}
+	}
+
 	switch (true) {
 		case VersionUtil.compare(version, '>=', '26.2'): {
 			return {
