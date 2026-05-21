@@ -39,6 +39,11 @@ export interface BlueprintSettings {
 	auto_update_rig_orientation: boolean
 	use_storage_for_animation: boolean
 	use_entity_stacking: boolean
+	// TSB Optimized Export (TSB-specific variant, 1.20.4-tsb only)
+	tsb_optimized_export: boolean
+	tsb_quantization_digits_default: number
+	tsb_cells_per_tick: number
+	tsb_max_line_bytes: number
 	// Plugin Settings
 	baked_animations: boolean
 	json_file: string
@@ -79,6 +84,13 @@ export const defaultValues: BlueprintSettings = {
 	auto_update_rig_orientation: true,
 	use_storage_for_animation: false,
 	use_entity_stacking: false,
+
+	// TSB Optimized Export
+	tsb_optimized_export: false,
+	tsb_quantization_digits_default: 5,
+	tsb_cells_per_tick: 1000,
+	tsb_max_line_bytes: 1_000_000,
+
 	// Plugin Settings
 	baked_animations: true,
 	json_file: '',
