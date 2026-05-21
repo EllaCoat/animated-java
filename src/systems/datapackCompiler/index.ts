@@ -34,6 +34,7 @@ import {
 	transformationToNbt,
 	zip,
 } from '../util'
+import { createAnimationStorageTsb } from './createAnimationStorageTsb'
 import ENTITY_NAMES from './entityNames'
 import { compileMcbProject } from './mcbCompiler'
 import OBJECTIVES from './objectives'
@@ -547,6 +548,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 	TextComponent.defaultMinecraftVersion = version
 
 	const aj = Project!.animated_java
+	const tsbOptimized = aj.tsb_optimized_export
 
 	const parsed = parseResourceLocation(aj.blueprint_id)
 	const relativePathToSrc = parsed.path
@@ -576,8 +578,14 @@ const dataPackCompiler: DataPackCompiler = async ({
 		transformationToNbt,
 		use_storage_for_animation: aj.use_storage_for_animation,
 		animationStorage: aj.use_storage_for_animation
-			? await createAnimationStorage(rig, animations)
+			? tsbOptimized
+				? await createAnimationStorageTsb(rig, animations)
+				: await createAnimationStorage(rig, animations)
 			: null,
+		tsb_optimized_export: tsbOptimized,
+		tsb_quantization_digits_default: aj.tsb_quantization_digits_default,
+		tsb_cells_per_tick: aj.tsb_cells_per_tick,
+		tsb_max_line_bytes: aj.tsb_max_line_bytes,
 		rig_hash: rigHash,
 		animation_hash: animationHash,
 		boundingBox: aj.render_box,
@@ -606,7 +614,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 		root_entity_tags: getRootEntityTags().toString(),
 	}
 
-	const mcbFiles = getMCBFilesByVersion(version)
+	const mcbFiles = getMCBFilesByVersion(version, tsbOptimized)
 
 	await compileMcbProject({
 		sourceFiles: {
