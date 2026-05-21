@@ -579,7 +579,18 @@ const dataPackCompiler: DataPackCompiler = async ({
 		use_storage_for_animation: aj.use_storage_for_animation,
 		animationStorage: aj.use_storage_for_animation
 			? tsbOptimized
-				? await createAnimationStorageTsb(rig, animations)
+				? await (async () => {
+						const tsbResult = await createAnimationStorageTsb(rig, animations, {
+							blueprintId: aj.blueprint_id,
+							quantizationDigits: aj.tsb_quantization_digits_default,
+							cellsPerTick: aj.tsb_cells_per_tick,
+							maxLineBytes: aj.tsb_max_line_bytes,
+						})
+						for (const [path, file] of tsbResult.files) {
+							versionedFiles.set(path, file)
+						}
+						return tsbResult.animationStorage
+				  })()
 				: await createAnimationStorage(rig, animations)
 			: null,
 		tsb_optimized_export: tsbOptimized,

@@ -3,18 +3,28 @@
 function on_load {
 	data modify storage <%project_storage%> rig_hash set value <%"'" + rig_hash + "'"%>
 
-	IF (has_animations) {
-		IF (use_storage_for_animation) {
-			REPEAT (animations) as animation {
-				data remove storage <%project_storage%>/animations <%animation.storage_name%>
-			}
-			<%animationStorage.join('\n')%>
+	IF (tsb_optimized_export) {
+		# TSB Optimized Export : 4 storage を namespace 単位で cleanup
+		# (anim NBT は on_load では展開せず、 段階展開キュー経由でロード)
+		function <%blueprint_id%>/cleanup
+	} ELSE IF (has_animations && use_storage_for_animation) {
+		REPEAT (animations) as animation {
+			data remove storage <%project_storage%>/animations <%animation.storage_name%>
 		}
+		<%animationStorage.join('\n')%>
+	}
+
+	IF (has_animations) {
 		<%%
 			animations.forEach(animation => {
 				emit(`scoreboard objectives add ${OBJECTIVES.FRAME(animation.storage_name)} dummy`)
 			})
 		%%>
+	}
+
+	IF (tsb_optimized_export && has_animations) {
+		# TSB Optimized Export : 展開キュー初期化 + 初回 tick schedule
+		function <%blueprint_id%>/load/init_queue
 	}
 }
 
