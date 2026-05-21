@@ -117,6 +117,7 @@ animated_java:
         rig.title: Rig
         event_functions.title: Event Functions
         plugin.title: Plugin
+        tsb.title: TSB Optimized Export
         misc.title: Misc
 
       project_settings:

@@ -16,6 +16,7 @@ import MiscComponent from './pages/misc.svelte'
 import PluginComponent from './pages/plugin.svelte'
 import ResourcepackComponent from './pages/resourcepack.svelte'
 import RigComponent from './pages/rig.svelte'
+import TsbComponent from './pages/tsb.svelte'
 
 const localize = createScopedTranslator('dialog.blueprint_settings')
 
@@ -60,6 +61,14 @@ export function openBlueprintSettings() {
 				condition: () => Project.pluginMode.get() === true,
 				label: localize('pages.plugin.title'),
 				icon: 'fa-paper-plane',
+			},
+			tsb: {
+				component: TsbComponent,
+				condition: () =>
+					Project.pluginMode.get() === false &&
+					Project.animated_java.data_pack_export_mode !== 'none',
+				label: localize('pages.tsb.title'),
+				icon: 'bolt',
 			},
 			misc: {
 				component: MiscComponent,
