@@ -26,11 +26,11 @@
 	{#if tsbOptimizedExport}
 		<NumberSlider
 			label="Quantization Digits (default)"
-			description="Default number of decimal digits used when quantizing float literals in animation NBT. Range 3..5. Can be overridden per animation."
+			description="Default number of decimal digits used when quantizing float literals in animation NBT. Range 2..7. Can be overridden per animation."
 			step={1}
 			bind:value={tsbQuantizationDigits}
-			min={3}
-			max={5}
+			min={2}
+			max={7}
 		></NumberSlider>
 
 		<NumberSlider

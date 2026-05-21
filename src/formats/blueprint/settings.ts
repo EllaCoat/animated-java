@@ -40,6 +40,7 @@ export interface BlueprintSettings {
 	use_storage_for_animation: boolean
 	use_entity_stacking: boolean
 	// TSB Optimized Export (TSB-specific variant, 1.20.4-tsb only)
+	// tsb_quantization_digits_default: default 5, range 2..7
 	tsb_optimized_export: boolean
 	tsb_quantization_digits_default: number
 	tsb_cells_per_tick: number
