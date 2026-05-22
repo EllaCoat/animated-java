@@ -139,13 +139,16 @@ function buildIdMappingComment(idMap: IdMap, blueprintId: string): string {
 }
 
 function buildCleanup(storageNs: string): string {
+	// `data remove storage` はパス必須 + 対象が無いと throw するため、
+	// 全 TSB データを固定ラッパー段 `d` 配下に置き、 execute if data でガードする。
+	const kinds = ['anim', 'variants', 'state', 'tmp'] as const
 	return (
-		[
-			`data remove storage ${storageNs}:anim`,
-			`data remove storage ${storageNs}:variants`,
-			`data remove storage ${storageNs}:state`,
-			`data remove storage ${storageNs}:tmp`,
-		].join('\n') + '\n'
+		kinds
+			.map(
+				k =>
+					`execute if data storage ${storageNs}:${k} d run data remove storage ${storageNs}:${k} d`
+			)
+			.join('\n') + '\n'
 	)
 }
 
@@ -167,7 +170,7 @@ function writeExpandFunctions(
 		if (!(b.uuid in anim.modified_nodes)) continue
 		const framesObj = buildBoneFramesObj(b, anim, opts.quantizationDigits)
 		if (framesObj === null) continue
-		const line = `$data modify storage ${storageNs}:anim ${animStorageName}.bones.${b.id}$(_) set value ${framesObj}`
+		const line = `$data modify storage ${storageNs}:anim d.${animStorageName}.bones.${b.id}$(_) set value ${framesObj}`
 		ensureLineWithinLimit(line, anim, b, opts.maxLineBytes)
 		items.push({ line })
 	}
@@ -175,7 +178,7 @@ function writeExpandFunctions(
 		if (!(l.uuid in anim.modified_nodes)) continue
 		const framesObj = buildLocatorFramesObj(l, anim, opts.quantizationDigits)
 		if (framesObj === null) continue
-		const line = `$data modify storage ${storageNs}:anim ${animStorageName}.locators.${l.id}$(_) set value ${framesObj}`
+		const line = `$data modify storage ${storageNs}:anim d.${animStorageName}.locators.${l.id}$(_) set value ${framesObj}`
 		ensureLineWithinLimit(line, anim, l, opts.maxLineBytes)
 		items.push({ line })
 	}
@@ -200,7 +203,7 @@ function writeExpandFunctions(
 		const isLast = i === batches.length - 1
 		const body = batches[i].map(it => it.line).join('\n')
 		const completionMark = isLast
-			? `$data modify storage ${storageNs}:state loaded.${animStorageName}$(_) set value 1b`
+			? `$data modify storage ${storageNs}:state d.loaded.${animStorageName}$(_) set value 1b`
 			: ''
 		const content = [body, completionMark].filter(Boolean).join('\n') + '\n'
 		files.set(`${fnPathPrefix}/expand/${animStorageName}/p${i}.mcfunction`, {
@@ -303,8 +306,8 @@ function buildVariantsExpand(
 	if (parts.length === 0) return null
 	return (
 		[
-			`$data modify storage ${storageNs}:variants ${anim.storage_name}$(_) set value {${parts.join(',')}}`,
-			`$data modify storage ${storageNs}:state loaded_variants.${anim.storage_name}$(_) set value 1b`,
+			`$data modify storage ${storageNs}:variants d.${anim.storage_name}$(_) set value {${parts.join(',')}}`,
+			`$data modify storage ${storageNs}:state d.loaded_variants.${anim.storage_name}$(_) set value 1b`,
 		].join('\n') + '\n'
 	)
 }
@@ -325,9 +328,9 @@ function buildInitQueue(
 		arr.length === 0 ? '[]' : `[${arr.map(r => `"${r}"`).join(',')}]`
 
 	const lines = [
-		`data modify storage ${storageNs}:state queue.immediate set value ${formatList(immediate)}`,
-		`data modify storage ${storageNs}:state queue.high set value ${formatList(high)}`,
-		`data modify storage ${storageNs}:state queue.low set value ${formatList(low)}`,
+		`data modify storage ${storageNs}:state d.queue.immediate set value ${formatList(immediate)}`,
+		`data modify storage ${storageNs}:state d.queue.high set value ${formatList(high)}`,
+		`data modify storage ${storageNs}:state d.queue.low set value ${formatList(low)}`,
 	]
 	if (immediate.length + high.length + low.length > 0) {
 		lines.push(`schedule function ${fnRef}/load/tick 1t replace`)
@@ -336,9 +339,9 @@ function buildInitQueue(
 }
 
 function buildLoadTick(storageNs: string, fnRef: string): string {
-	const im = `${storageNs}:state queue.immediate[0]`
-	const hi = `${storageNs}:state queue.high[0]`
-	const lo = `${storageNs}:state queue.low[0]`
+	const im = `${storageNs}:state d.queue.immediate[0]`
+	const hi = `${storageNs}:state d.queue.high[0]`
+	const lo = `${storageNs}:state d.queue.low[0]`
 	return (
 		[
 			`execute if data storage ${im} run return run function ${fnRef}/load/pop/immediate`,
@@ -359,9 +362,9 @@ function buildPop(
 ): string {
 	return (
 		[
-			`data modify storage ${storageNs}:tmp pop set from storage ${storageNs}:state queue.${priority}[0]`,
-			`data remove storage ${storageNs}:state queue.${priority}[0]`,
-			`function ${fnRef}/load/dispatch with storage ${storageNs}:tmp`,
+			`data modify storage ${storageNs}:tmp d.pop set from storage ${storageNs}:state d.queue.${priority}[0]`,
+			`data remove storage ${storageNs}:state d.queue.${priority}[0]`,
+			`function ${fnRef}/load/dispatch with storage ${storageNs}:tmp d`,
 		].join('\n') + '\n'
 	)
 }
