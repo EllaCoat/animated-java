@@ -283,6 +283,82 @@ expand 関数 1 個あたり 1 tick 消費。 アキシャ全 anim の expand �
 - [ ] MSPT が誤差レベル (load 中と比べて load 後の方が明らかに軽い、 has_work アイドルガードが効いている証拠)
 - [ ] `tick` プロファイラ : `/debug start` → 1 分後 `/debug stop` で生成されるレポートで、 `animated_java:global/load_tick` が **ほぼゼロコスト** で並んでいること
 
+### 4-6. animation_hash 一致時の reload skip 検証 (2026-05-22 追加)
+
+`on_load.mcfunction` 末尾の 2 行で、 アニメ内容に変化が無い reload では `init_queue` がスキップされる仕様。 詳細 : `docs/tsb-known-issues/reload-skip-on-hash-match.md`。
+
+#### 4-6-1. on_load.mcfunction の構造確認
+
+```bash
+cat data/aj/functions/axia/on_load.mcfunction | tail -5
+```
+
+期待 (末尾 2 行) :
+
+```mcfunction
+execute store success score #h aj.i run data modify storage aj.axia:state d.animation_hash set value "<sha256_hex>"
+execute if score #h aj.i matches 1 run function aj:axia/load/init_queue
+```
+
+- [ ] 上記 2 行が存在する
+- [ ] `set value "..."` の値が 64 文字 hex 文字列 (SHA-256 出力)
+- [ ] `IF (tsb_optimized_export && has_animations)` ガード下にあること (TSB 経路のみ)
+
+#### 4-6-2. 完全展開済 reload → スキップ動作
+
+完走 (4-4 で確認) 後の状態から :
+
+```mcfunction
+/reload
+/scoreboard players get #h aj.i
+```
+
+- [ ] `#h aj.i` が **0** を返す (set value が throw、 init_queue スキップ)
+- [ ] server log に `Nothing changed. That's already the value.` が **1 行だけ** 出る (許容)
+- [ ] `/data get storage aj.global:state d.has_work` で **キーが存在しない** = アイドル状態維持
+- [ ] `/data get storage aj.axia:state d.loaded` で **全 anim マーク維持** (再展開されていない証拠)
+
+#### 4-6-3. 部分展開中 reload → スキップしても続行
+
+reload 直後 (展開中、 4-3 のペースで観察可能なタイミング) で再 reload :
+
+```mcfunction
+/reload
+# 即座に
+/scoreboard players get #h aj.i
+```
+
+- [ ] `#h aj.i` が **0** (hash 一致でスキップ)
+- [ ] その後さらに 60 tick 程度待つ → `/data get storage aj.axia:state d.loaded` で **全 anim マークが揃う** (load_tick が継続して per-bp queue を処理した証拠)
+- [ ] global queue の `d.has_work` も最終的に消える
+
+これが「キューに残っていたとしても、 別にいつか読み込まれる」 シナリオの実機確認。
+
+#### 4-6-4. datapack 入れ替え (hash 不一致) → 通常 init_queue
+
+Blockbench に戻ってアニメ frame を 1 つ変更 → 再 export → server の datapack を上書き :
+
+```mcfunction
+/reload
+/scoreboard players get #h aj.i
+```
+
+- [ ] `#h aj.i` が **1** (hash 書き換え成功)
+- [ ] init_queue が走り、 4-2 と同じ初期 queue 状態になる
+- [ ] 段階展開が新 anim 構成で進む
+- [ ] 旧 datapack で参照されてた未使用 cell が `data get storage aj.axia:anim d` の出力に **残ってる**可能性あり (許容範囲、 必要なら手動 cleanup)
+
+#### 4-6-5. cleanup 後 reload → 初回 load と同じ
+
+```mcfunction
+/function aj:axia/cleanup
+/reload
+/scoreboard players get #h aj.i
+```
+
+- [ ] `#h aj.i` が **1** (state.d 全削除済なので新規追加)
+- [ ] init_queue が走り、 4-2 と同じ初期状態に
+
 ## 5. テスト 3 : cleanup 動作確認
 
 ### 5-1. silent uninstall=true (default) で手動 cleanup
@@ -556,8 +632,9 @@ cat data/animated_java/functions/axia/on_load.mcfunction | wc -l
 - [ ] 2 bp 同時 load でも全体 budget が 1 expand /tick に収まる (= MSPT が単 bp と同等)
 - [ ] cleanup → reload サイクルで残骸 / 不整合が発生しない
 - [ ] サーバログにエラー (`Unknown function` / `Couldn't load functions` / `Couldn't parse text component` 等) が出ない
-- [ ] **tellraw 関連** : 1.20.4 で `"color":"red"` などの JSON 形式で出力されている (SNBT (`"color":red`) になっていない、 `tellraw-snbt-on-1.20.4` 修正の検証)
+- [ ] **tellraw 関連** : 1.20.4 で `"color":"red"` などの JSON 形式で出力されている (SNBT (`"color":red`) になっていない、 `tellraw-snbt-on-1.20.4` 修正 [案 c = JSON.stringify バイパス] の検証、 tellraw 7 行 + text display 系も対象)
 - [ ] **variant 関連** : `expand_variants.mcfunction` が project 単位 1 ファイル、 `force_load/<anim>.mcfunction` 冒頭に variant guard 行、 `init_queue` の `queue.immediate` に variant ref 1 個固定、 `d.loaded_variants` が project 単位 boolean
+- [ ] **animation_hash reload skip** : on_load 末尾に hash 判定 2 行、 完全展開済 reload で `#h aj.i` が 0 維持、 hash 不一致時のみ init_queue 走行 (`reload-skip-on-hash-match` 検証)
 
 ## 12. 検証結果のフィードバック (次セッション引き継ぎ用)
 
