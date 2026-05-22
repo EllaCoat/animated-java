@@ -180,62 +180,62 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'# 0: muzzle'
 			),
 			[`${P}/cleanup.mcfunction`]: mc(
-				'data remove storage aj.demo_boss:anim',
-				'data remove storage aj.demo_boss:variants',
-				'data remove storage aj.demo_boss:state',
-				'data remove storage aj.demo_boss:tmp'
+				'execute if data storage aj.demo_boss:anim d run data remove storage aj.demo_boss:anim d',
+				'execute if data storage aj.demo_boss:variants d run data remove storage aj.demo_boss:variants d',
+				'execute if data storage aj.demo_boss:state d run data remove storage aj.demo_boss:state d',
+				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d'
 			),
 			[`${P}/expand/idle/p0.mcfunction`]: mc(
-				'$data modify storage aj.demo_boss:anim idle.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,.1f,0f,0f,.087f,0f,.996f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim idle.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim idle.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,.052f,0f,.999f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim idle.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,5f,10f],"2":[0f,1.5f,0f,0f,0f]}',
-				'$data modify storage aj.demo_boss:state loaded.idle$(_) set value 1b'
+				'$data modify storage aj.demo_boss:anim d.idle.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,.1f,0f,0f,.087f,0f,.996f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,.052f,0f,.999f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,5f,10f],"2":[0f,1.5f,0f,0f,0f]}',
+				'$data modify storage aj.demo_boss:state d.loaded.idle$(_) set value 1b'
 			),
 			[`${P}/expand/attack/p0.mcfunction`]: mc(
-				'$data modify storage aj.demo_boss:anim attack.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,.174f,0f,.985f,1f,1f,1f],"2":[0f,.3f,0f,.087f,.342f,.025f,.935f,1f,1f,1f],"3":[0f,.2f,0f,0f,.342f,0f,.94f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim attack.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"3":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim attack.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,.5f,.866f,1f,1f,1f],"3":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"4":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim attack.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,10f,0f],"2":[.05f,1.5f,.3f,30f,0f],"3":[0f,1.5f,0f,15f,0f],"4":[0f,1.5f,0f,0f,0f]}',
-				'$data modify storage aj.demo_boss:state loaded.attack$(_) set value 1b'
+				'$data modify storage aj.demo_boss:anim d.attack.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,.174f,0f,.985f,1f,1f,1f],"2":[0f,.3f,0f,.087f,.342f,.025f,.935f,1f,1f,1f],"3":[0f,.2f,0f,0f,.342f,0f,.94f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"3":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,.5f,.866f,1f,1f,1f],"3":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"4":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,10f,0f],"2":[.05f,1.5f,.3f,30f,0f],"3":[0f,1.5f,0f,15f,0f],"4":[0f,1.5f,0f,0f,0f]}',
+				'$data modify storage aj.demo_boss:state d.loaded.attack$(_) set value 1b'
 			),
 			[`${P}/force_load/idle.mcfunction`]: mc('function aj:demo_boss/expand/idle/p0 {_: ""}'),
 			[`${P}/force_load/attack.mcfunction`]: mc(
 				'function aj:demo_boss/expand/attack/p0 {_: ""}'
 			),
 			[`${P}/expand_variants/attack.mcfunction`]: mc(
-				'$data modify storage aj.demo_boss:variants attack$(_) set value {"0":{name:"damaged",condition:""}}',
-				'$data modify storage aj.demo_boss:state loaded_variants.attack$(_) set value 1b'
+				'$data modify storage aj.demo_boss:variants d.attack$(_) set value {"0":{name:"damaged",condition:""}}',
+				'$data modify storage aj.demo_boss:state d.loaded_variants.attack$(_) set value 1b'
 			),
 			[`${P}/load/init_queue.mcfunction`]: mc(
-				'data modify storage aj.demo_boss:state queue.immediate set value []',
-				'data modify storage aj.demo_boss:state queue.high set value []',
-				'data modify storage aj.demo_boss:state queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0","aj:demo_boss/expand_variants/attack"]',
+				'data modify storage aj.demo_boss:state d.queue.immediate set value []',
+				'data modify storage aj.demo_boss:state d.queue.high set value []',
+				'data modify storage aj.demo_boss:state d.queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0","aj:demo_boss/expand_variants/attack"]',
 				'schedule function aj:demo_boss/load/tick 1t replace'
 			),
 			[`${P}/load/tick.mcfunction`]: mc(
-				'execute if data storage aj.demo_boss:state queue.immediate[0] run return run function aj:demo_boss/load/pop/immediate',
-				'execute if data storage aj.demo_boss:state queue.high[0] run return run function aj:demo_boss/load/pop/high',
-				'execute if data storage aj.demo_boss:state queue.low[0] run function aj:demo_boss/load/pop/low',
+				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/pop/immediate',
+				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/pop/high',
+				'execute if data storage aj.demo_boss:state d.queue.low[0] run function aj:demo_boss/load/pop/low',
 				'',
-				'execute if data storage aj.demo_boss:state queue.immediate[0] run schedule function aj:demo_boss/load/tick 1t replace',
-				'execute unless data storage aj.demo_boss:state queue.immediate[0] if data storage aj.demo_boss:state queue.high[0] run schedule function aj:demo_boss/load/tick 1t replace',
-				'execute unless data storage aj.demo_boss:state queue.immediate[0] unless data storage aj.demo_boss:state queue.high[0] if data storage aj.demo_boss:state queue.low[0] run schedule function aj:demo_boss/load/tick 1t replace'
+				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run schedule function aj:demo_boss/load/tick 1t replace',
+				'execute unless data storage aj.demo_boss:state d.queue.immediate[0] if data storage aj.demo_boss:state d.queue.high[0] run schedule function aj:demo_boss/load/tick 1t replace',
+				'execute unless data storage aj.demo_boss:state d.queue.immediate[0] unless data storage aj.demo_boss:state d.queue.high[0] if data storage aj.demo_boss:state d.queue.low[0] run schedule function aj:demo_boss/load/tick 1t replace'
 			),
 			[`${P}/load/pop/immediate.mcfunction`]: mc(
-				'data modify storage aj.demo_boss:tmp pop set from storage aj.demo_boss:state queue.immediate[0]',
-				'data remove storage aj.demo_boss:state queue.immediate[0]',
-				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp'
+				'data modify storage aj.demo_boss:tmp d.pop set from storage aj.demo_boss:state d.queue.immediate[0]',
+				'data remove storage aj.demo_boss:state d.queue.immediate[0]',
+				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp d'
 			),
 			[`${P}/load/pop/high.mcfunction`]: mc(
-				'data modify storage aj.demo_boss:tmp pop set from storage aj.demo_boss:state queue.high[0]',
-				'data remove storage aj.demo_boss:state queue.high[0]',
-				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp'
+				'data modify storage aj.demo_boss:tmp d.pop set from storage aj.demo_boss:state d.queue.high[0]',
+				'data remove storage aj.demo_boss:state d.queue.high[0]',
+				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp d'
 			),
 			[`${P}/load/pop/low.mcfunction`]: mc(
-				'data modify storage aj.demo_boss:tmp pop set from storage aj.demo_boss:state queue.low[0]',
-				'data remove storage aj.demo_boss:state queue.low[0]',
-				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp'
+				'data modify storage aj.demo_boss:tmp d.pop set from storage aj.demo_boss:state d.queue.low[0]',
+				'data remove storage aj.demo_boss:state d.queue.low[0]',
+				'function aj:demo_boss/load/dispatch with storage aj.demo_boss:tmp d'
 			),
 			[`${P}/load/dispatch.mcfunction`]: mc('$function $(pop) {_: ""}'),
 		}
@@ -279,14 +279,14 @@ describe('createAnimationStorageTsb - batch splitting (cells_per_tick)', () => {
 		const p1 = result.files.get('data/aj/functions/demo/expand/run/p1.mcfunction')!.content
 
 		// completion mark belongs only to the final batch
-		expect(p0).not.toContain('loaded.run')
-		expect(p1).toContain('$data modify storage aj.demo:state loaded.run$(_) set value 1b')
+		expect(p0).not.toContain('d.loaded.run')
+		expect(p1).toContain('$data modify storage aj.demo:state d.loaded.run$(_) set value 1b')
 
 		// p0 carries bones a (id 0) and b (id 1); p1 carries bone c (id 2)
-		expect(p0).toContain('run.bones.0$(_)')
-		expect(p0).toContain('run.bones.1$(_)')
-		expect(p0).not.toContain('run.bones.2$(_)')
-		expect(p1).toContain('run.bones.2$(_)')
+		expect(p0).toContain('d.run.bones.0$(_)')
+		expect(p0).toContain('d.run.bones.1$(_)')
+		expect(p0).not.toContain('d.run.bones.2$(_)')
+		expect(p1).toContain('d.run.bones.2$(_)')
 
 		// force_load runs every batch immediately
 		expect(result.files.get('data/aj/functions/demo/force_load/run.mcfunction')!.content).toBe(
@@ -296,7 +296,7 @@ describe('createAnimationStorageTsb - batch splitting (cells_per_tick)', () => {
 		// init_queue enqueues every batch into queue.low (Phase B-1 behaviour)
 		expect(
 			result.files.get('data/aj/functions/demo/load/init_queue.mcfunction')!.content
-		).toContain('queue.low set value ["aj:demo/expand/run/p0","aj:demo/expand/run/p1"]')
+		).toContain('d.queue.low set value ["aj:demo/expand/run/p0","aj:demo/expand/run/p1"]')
 	})
 })
 
