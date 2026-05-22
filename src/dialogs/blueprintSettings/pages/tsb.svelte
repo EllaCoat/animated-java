@@ -7,12 +7,14 @@
 	let tsbQuantizationDigits = $state(Project.animated_java.tsb_quantization_digits_default)
 	let tsbCellsPerTick = $state(Project.animated_java.tsb_cells_per_tick)
 	let tsbMaxLineBytes = $state(Project.animated_java.tsb_max_line_bytes)
+	let tsbSilentUninstall = $state(Project.animated_java.tsb_silent_uninstall)
 
 	onDestroy(() => {
 		Project.animated_java.tsb_optimized_export = tsbOptimizedExport
 		Project.animated_java.tsb_quantization_digits_default = tsbQuantizationDigits
 		Project.animated_java.tsb_cells_per_tick = tsbCellsPerTick
 		Project.animated_java.tsb_max_line_bytes = tsbMaxLineBytes
+		Project.animated_java.tsb_silent_uninstall = tsbSilentUninstall
 	})
 </script>
 
@@ -50,6 +52,12 @@
 			min={100000}
 			max={100000000}
 		></NumberSlider>
+
+		<Checkbox
+			label="Silent Uninstall (suppress UNINSTALL tellraw)"
+			description="When the cleanup function calls remove_animation_objectives, suppress the UNINSTALL tellraw message that broadcasts 'Successfully uninstalled <blueprint_id>' to all players. Recommended for distribution builds where end-users should not see internal cleanup messages. Disable to keep the original AJ behaviour for debugging or AJ-style use."
+			bind:value={tsbSilentUninstall}
+		></Checkbox>
 	{/if}
 </div>
 

@@ -38,7 +38,12 @@ IF (has_animations) {
 				emit(`scoreboard objectives remove ${OBJECTIVES.FRAME(animation.storage_name)}`)
 			})
 		%%>
-		tellraw @a <%TELLRAW.UNINSTALL()%>
+		# TSB Optimized Export 配布ビルドでは UNINSTALL tellraw を抑制
+		# (Blueprint Settings の `Silent Uninstall` チェックボックス、 default true)。
+		# false にすると純正 AJ と同じ挙動 (tellraw でアンインストール完了をブロードキャスト)。
+		IF (!tsb_silent_uninstall) {
+			tellraw @a <%TELLRAW.UNINSTALL()%>
+		}
 	}
 }
 

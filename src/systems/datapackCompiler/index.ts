@@ -597,6 +597,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 		tsb_quantization_digits_default: aj.tsb_quantization_digits_default,
 		tsb_cells_per_tick: aj.tsb_cells_per_tick,
 		tsb_max_line_bytes: aj.tsb_max_line_bytes,
+		tsb_silent_uninstall: aj.tsb_silent_uninstall,
 		rig_hash: rigHash,
 		animation_hash: animationHash,
 		boundingBox: aj.render_box,
