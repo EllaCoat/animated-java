@@ -263,18 +263,24 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'$data modify storage aj.demo_boss:anim d.attack.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,10f,0f],"2":[.05f,1.5f,.3f,30f,0f],"3":[0f,1.5f,0f,15f,0f],"4":[0f,1.5f,0f,0f,0f]}',
 				'$data modify storage aj.demo_boss:state d.loaded.attack$(_) set value 1b'
 			),
-			[`${P}/force_load/idle.mcfunction`]: mc('function aj:demo_boss/expand/idle/p0 {_: ""}'),
+			[`${P}/force_load/idle.mcfunction`]: mc(
+				'execute unless data storage aj.demo_boss:state d.loaded_variants run function aj:demo_boss/expand_variants {_: ""}',
+				'function aj:demo_boss/expand/idle/p0 {_: ""}'
+			),
 			[`${P}/force_load/attack.mcfunction`]: mc(
+				'execute unless data storage aj.demo_boss:state d.loaded_variants run function aj:demo_boss/expand_variants {_: ""}',
 				'function aj:demo_boss/expand/attack/p0 {_: ""}'
 			),
-			[`${P}/expand_variants/attack.mcfunction`]: mc(
+			[`${P}/expand_variants.mcfunction`]: mc(
 				'$data modify storage aj.demo_boss:variants d.attack$(_) set value {"0":{name:"damaged",condition:""}}',
-				'$data modify storage aj.demo_boss:state d.loaded_variants.attack$(_) set value 1b'
+				'$data modify storage aj.demo_boss:state d.loaded_variants$(_) set value 1b'
 			),
 			[`${P}/load/init_queue.mcfunction`]: mc(
-				'data modify storage aj.demo_boss:state d.queue.immediate set value []',
+				'data modify storage aj.demo_boss:state d.queue.immediate set value ["aj:demo_boss/expand_variants"]',
 				'data modify storage aj.demo_boss:state d.queue.high set value []',
-				'data modify storage aj.demo_boss:state d.queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0","aj:demo_boss/expand_variants/attack"]',
+				'data modify storage aj.demo_boss:state d.queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0"]',
+				'execute unless data storage aj.global:state d.active."aj:demo_boss".immediate run data modify storage aj.global:state d.queue_order.immediate append value {id:"aj:demo_boss"}',
+				'data modify storage aj.global:state d.active."aj:demo_boss".immediate set value 1b',
 				'execute unless data storage aj.global:state d.active."aj:demo_boss".low run data modify storage aj.global:state d.queue_order.low append value {id:"aj:demo_boss"}',
 				'data modify storage aj.global:state d.active."aj:demo_boss".low set value 1b',
 				'data modify storage aj.global:state d.has_work set value 1b'
