@@ -25,6 +25,23 @@ dir global {
 		execute as @e[type=item_display,tag=<%TAGS.GLOBAL_ROOT()%>] at @s run function *global/root/on_tick
 	}
 
+	IF (tsb_optimized_export && has_animations) {
+		# TSB Optimized Export 並列 load 制御 (Phase B-1.5)。 各 blueprint の `aj:<bp>/load/init_queue` が
+		# `aj.global:state d.active.<bpId>` membership ガード経由で `d.queue_order` に compound エントリ
+		# `{id:"<bpId>"}` を append する。 この load_tick が `minecraft:tick` タグで常駐し、 毎 tick で
+		# queue_order[0] の bp の load/step を呼び出す。 各 step は 1 expand 関数を消費 + 末尾で round-robin
+		# または active 削除を行うため、 N bp 同時 active でも全体 budget = 1 expand /tick に収まる。
+		# 詳細 : docs/tsb-known-issues/parallel-project-load.md。
+		function load_tick minecraft:tick {
+			execute unless data storage aj.global:state d.queue_order[0] run return 0
+			function *global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+		}
+
+		function load_dispatch_step {
+			$function $(id)/load/step
+		}
+	}
+
 	tag functions on_load {
 		<%blueprint_id%>/on_load
 	}

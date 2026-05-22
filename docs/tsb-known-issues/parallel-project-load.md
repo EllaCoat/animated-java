@@ -1,114 +1,293 @@
-# TSB Known Issue: 複数 AJ プロジェクトの並列 load tick 負荷 + load 中 reload の挙動
+# TSB Phase B-1.5: 並列 load の global キュー化
 
-- **ステータス**: 議論中 (設計案 4 件を提示、 ユーザー判断待ち)
-- **発見日**: 2026-05-22 (ユーザーから運用観点の懸念として提起)
-- **重大度**: 中 (現状 + 複数 blueprint 同時 active 環境で線形に重くなる、 開発時のみ顕在化)
-- **発生箇所**: `src/systems/datapackCompiler/createAnimationStorageTsb.ts` の `buildLoadTick` / `buildInitQueue`
+- **ステータス**: 方針確定 (案 A' 採用) → 実装中 (Phase B-1.5)
+- **発見日**: 2026-05-22 (運用観点の懸念として提起)
+- **方針確定日**: 2026-05-22 (同日、 MC ソース確認 + ちぇん氏改造版調査の結果を踏まえて)
+- **重大度**: 中 → 解消方向 (複数 blueprint 同時 active で全体 budget = 1 × cells_per_tick に揃う)
+- **影響箇所**: `src/systems/datapackCompiler/createAnimationStorageTsb.ts` / `src/systems/datapackCompiler/1.20.4-tsb/global.mcb`
 
-## 問題 1: 並列 load tick
+## 問題の再掲
 
-### 現状の構造
+各 blueprint が独立に `schedule function aj:<bp>/load/tick 1t replace` で自己再 schedule する
+構造のため、 N 個の blueprint が同時 active な状況では毎 tick で N 回の load/tick が走り、
+**全体 budget が N × cells_per_tick に線形比例して膨らむ**。 開発時の同時 reload や、
+今後プロジェクト数が増えた際に顕在化する。
 
-各 blueprint は独立に load/tick を持ち、 `schedule function aj:<bp>/load/tick 1t replace` で
-自己再 schedule する。 N 個の blueprint が同時 active なら、 毎 tick で N 回の load/tick が
-走り、 それぞれが自分の `cells_per_tick` (default 1000) を消費する。
+## 採用方針: 案 A' (global active list + minecraft:tick タグ駆動 + per-bp queue + round-robin)
 
-→ **全体 budget は N × cells_per_tick**。 N に線形比例して重くなる。
+「キュー global 管理 + tag/tick.json で監視 + force_load は loaded フラグ判定」 という
+イーラ君提案 (2026-05-22 メッセージ) を、 リロード安全性を考慮して per-bp 区切り + active
+list 方式に展開した形。 ちぇん氏改造版が `animated_java:global/on_tick` を `minecraft:tick`
+タグ経由で常駐させていた設計と整合的。
 
-### シナリオ
+### 全体構造
 
-- アキシャ (~43200 cells) + 別 boss (~30000 cells) が同時に reload された場合
-- 各 blueprint が 43 tick / 30 tick で展開完了するが、 その間は 2000 cells/tick 消費
-- 3 体目以降を入れると線形に増加 → tick 詰まり / TPS 低下のリスク
-
-通常運用では「全 boss を同時に reload する」 シーンは少ない (= 開発時のみ問題化)、 だが
-プロジェクトが増えるほど顕在化する。
-
-## 設計案 4 件
-
-### 案 A: グローバル schedule (集中制御)
-
-`aj:global/load/tick` という共通関数を新設し、 各 blueprint の load/tick を順番に呼ぶ。
-各 blueprint の `init_queue` は global pending list に自分を append する。
-
-```mcfunction
-# aj:global/load/tick (全 blueprint 共通、 改造後 AJ で 1 個だけ生成)
-execute if data storage aj:global pending[0] run function aj:global/dispatch with storage aj:global
-execute if data storage aj:global pending[0] run schedule function aj:global/load/tick 1t replace
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ aj.global:state  (TSB バリアントの新規 storage、 全 bp 共有)              │
+│   d.active = {                                                          │
+│     <bp_id_1>: 1b,   # membership set (重複登録ガード用)                  │
+│     <bp_id_2>: 1b,                                                      │
+│     ...                                                                 │
+│   }                                                                     │
+│   d.queue_order = [                                                     │
+│     "<bp_id_1>", "<bp_id_2>", ...   # 巡回順序 (round-robin 用、 list)   │
+│   ]                                                                     │
+└─────────────────────────────────────────────────────────────────────────┘
+            ▲ append (重複ガード)
+            │                                  ▼ 先頭を読んで dispatch
+┌──────────────────────┐   ┌──────────────────────────────────────────┐
+│ aj:<bp>/load/init_queue│   │ animated_java:global/load_tick (minecraft:tick)│
+│ ─ 自 bp queue を上書き│   │ ─ queue_order[0] が無ければ早期 return        │
+│ ─ global active 登録 │   │ ─ ある場合 dispatch_step を呼ぶ                │
+└──────────────────────┘   │ ─ dispatch_step が                              │
+                           │     $function aj:$(queue_order[0])/load/step    │
+                           └──────────────────────────────────────────┘
+                                                  │
+                                                  ▼
+                              ┌──────────────────────────────────────────┐
+                              │ aj:<bp>/load/step (per-bp)              │
+                              │ ─ immediate→high→low の 1 pop + dispatch│
+                              │ ─ 末尾で queue 残量を判定               │
+                              │   ─ 残ってる→rotate_active (round-robin)│
+                              │   ─ 空 → remove_from_global             │
+                              └──────────────────────────────────────────┘
 ```
 
-- **メリット** : 全体 budget が確実に 1 × cells_per_tick に収まる、 並列負荷ゼロ
-- **デメリット** : 専用 namespace `aj:global` の導入、 既存 AJ ユーザーに影響する可能性、 cells_per_tick がプロジェクト共有になるので個別チューニング不可
-- **推奨度** : 高 (TSB バリアントのみで完結させる前提なら)
+### 関数 API (TSB バリアント、 1.20.4-tsb/ で生成)
 
-### 案 B: cells_per_tick の共有 budget (緩い制御)
+| 関数 | 配置 | 役割 |
+|---|---|---|
+| `animated_java:global/load_tick` | global.mcb で生成、 `minecraft:tick` タグに登録 | 毎 tick `aj.global:state d.queue_order[0]` を確認、 あれば dispatch_step を呼ぶ |
+| `animated_java:global/load_dispatch_step` | global.mcb で生成 | `$function aj:$(queue_order[0])/load/step` でマクロ展開 |
+| `aj:<bp>/load/init_queue` | createAnimationStorageTsb で生成 (per-bp) | 自 bp queue を `set value` で上書き + global active membership ガード + queue_order append (重複登録なし) |
+| `aj:<bp>/load/step` | createAnimationStorageTsb で生成 (per-bp) | 既存 load/tick の 1 pop ロジック + 末尾で rotate_active / remove_from_global の分岐 |
+| `aj:<bp>/load/rotate_active` | createAnimationStorageTsb で生成 (per-bp) | `data remove ... queue_order[0]` + `data modify ... queue_order append "<bp_id>"` |
+| `aj:<bp>/load/remove_from_global` | createAnimationStorageTsb で生成 (per-bp) | `data remove ... queue_order[0]` + `data remove ... active.<bp_id>` |
+| `aj:<bp>/load/pop/{immediate,high,low}` | 既存維持 | 既存ロジック (queue から先頭を取って dispatch) |
+| `aj:<bp>/load/dispatch` | 既存維持 | `$function $(pop) {_: ""}` 既存マクロ展開 |
+| `aj:<bp>/load/tick` | **削除** | 旧 schedule 自己再帰版は廃止 |
 
-各 blueprint の load/tick 冒頭で global counter を見て budget 残量があれば実行、 無ければ
-skip。 budget は毎 tick リセット。
+### namespace 設計判断
+
+- function namespace : **`animated_java:global/...`** を流用 (upstream 既存 namespace、 mcb の `dir global` 内に閉じる)
+- storage namespace : **`aj.global:state`** を新設 (per-bp の `aj.<bp>:state` と同じ系統で命名統一)
+- 関数だけ namespace 不一致になるが、 mcb の dir 機構で素直に書ける優先 + upstream への影響を最小化 (TSB バリアントのみ load_tick / load_dispatch_step が増えるだけ、 既存関数は無改変)
+
+### init_queue の改修詳細
 
 ```mcfunction
-# aj:<bp>/load/tick の冒頭
-execute if score #aj.global.budget aj.i matches ..0 run return run schedule function aj:<bp>/load/tick 1t replace
-scoreboard players remove #aj.global.budget aj.i <%cells_per_tick%>
-function aj:<bp>/load/tick/work  # 実際の pop + dispatch
+# aj:<bp>/load/init_queue
+
+# 自 bp queue を完全上書き (リロード時の旧残骸を消す、 set value は MC ソース確認で O(N) 単純 replace)
+data modify storage aj.<bp>:state d.queue.immediate set value []
+data modify storage aj.<bp>:state d.queue.high set value []
+data modify storage aj.<bp>:state d.queue.low set value ["<expand_ref_1>", "<expand_ref_2>", ...]
+
+# global active membership 重複ガード (リロードで二重登録しない)
+execute unless data storage aj.global:state d.active.<bp_id> run data modify storage aj.global:state d.queue_order append value "<bp_id>"
+data modify storage aj.global:state d.active.<bp_id> set value 1b
+
+# schedule は不要 (global load_tick が minecraft:tick タグで常駐監視)
 ```
 
-- **メリット** : 既存の per-blueprint 構造を維持しつつ全体 budget を保護
-- **デメリット** : 同じ tick 内で複数 blueprint が走る → 順序保証なし。 budget リセットの仕組みが別途必要
-- **推奨度** : 中
+注意点 :
 
-### 案 C: 順次ロード (1 blueprint ずつ完走)
+- queue 上書きは `set value` (MC ソース上 O(N) 単純 replace、 副作用なし、 merge 経路に乗らない、 `NbtPathArgument.java:621` で 1 度 `copy()` + `CompoundTag.java:214` で HashMap 置換)
+- リロードで旧 queue 残骸が消える + 削除アニメへの古い expand 参照も消える (= 不存在 function 呼び出しエラーを未然に防ぐ)
+- active membership は `aj.global:state d.active.<bp_id>` の compound key で持つので、 list 内の値検査を回避
 
-「現在 load 中の blueprint」 を 1 つだけに制限。 各 blueprint の init_queue は global lock を
-取得してから自分の load/tick を起動。 完了したら lock 解放 + 次の bp の load 開始。
+### step の改修詳細
 
-- **メリット** : シンプル、 budget の概念が要らない
-- **デメリット** : 待機中の blueprint の force_load fallback が必要 (戦闘要求が来たら強制展開)、 順序固定
-- **推奨度** : 中〜低 (待機ロジックが複雑、 force_load との整合性確保が課題)
+```mcfunction
+# aj:<bp>/load/step (旧 load/tick の置き換え)
 
-### 案 D: 現状維持 + 運用ガイド
+# 既存 load/tick と同じ 1 pop ロジック (immediate → high → low の優先度)
+execute if data storage aj.<bp>:state d.queue.immediate[0] run return run function aj:<bp>/load/pop/immediate
+execute if data storage aj.<bp>:state d.queue.high[0] run return run function aj:<bp>/load/pop/high
+execute if data storage aj.<bp>:state d.queue.low[0] run function aj:<bp>/load/pop/low
 
-実装変更なし、 運用面で対処する。
+# 末尾で queue 残量を判定 → round-robin か remove
+execute if data storage aj.<bp>:state d.queue.immediate[0] run return run function aj:<bp>/load/rotate_active
+execute if data storage aj.<bp>:state d.queue.high[0] run return run function aj:<bp>/load/rotate_active
+execute if data storage aj.<bp>:state d.queue.low[0] run return run function aj:<bp>/load/rotate_active
+function aj:<bp>/load/remove_from_global
+```
 
-- 同時に load させる blueprint 数を絞る (= 開発時のみ問題なので、 開発者が手動で順次 reload)
-- `cells_per_tick` を blueprint 数で割って設定する運用 (例 : 3 体同時なら 333 を各 bp に設定)
-- README に「複数 blueprint 同時 reload は重い、 reload は順次で」 を明記
+```mcfunction
+# aj:<bp>/load/rotate_active
+data remove storage aj.global:state d.queue_order[0]
+data modify storage aj.global:state d.queue_order append value "<bp_id>"
+```
 
-- **メリット** : 実装コストゼロ、 Phase D の実機検証で問題化しなければ十分
-- **デメリット** : 実機でストレスが出たら結局案 A〜C のどれかが必要
-- **推奨度** : Phase D 検証までは妥当、 検証で問題が出たら案 A への移行
+```mcfunction
+# aj:<bp>/load/remove_from_global
+data remove storage aj.global:state d.queue_order[0]
+data remove storage aj.global:state d.active.<bp_id>
+```
 
-## 問題 2: load 中の reload 挙動
+### global load_tick / dispatch_step (global.mcb で生成、 TSB 専用)
 
-### 整理
+```mcfunction
+# animated_java:global/load_tick (minecraft:tick タグ登録)
+execute unless data storage aj.global:state d.queue_order[0] run return 0
+function animated_java:global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+```
 
-シナリオ : 旧 datapack が load/tick で queue を消費中、 `/reload` が実行された場合。
+```mcfunction
+# animated_java:global/load_dispatch_step
+$function $(id)/load/step
+```
 
-1. 旧 datapack の `schedule function aj:<bp>/load/tick 1t replace` が動作中
-2. `/reload` 実行 → 新 datapack の on_load が走る (cleanup は呼ばれない、 上記 `cleanup-on-load-removed.md` 参照)
-3. 新 `init_queue` が `data modify storage ... d.queue.* set value [...]` で queue を **上書き**
-4. 新 `schedule function aj:<bp>/load/tick 1t replace` で旧 schedule を **破棄** + 新 schedule
-5. 以降は新 datapack の load/tick が新 queue を消費 → 新 expand を呼ぶ
+注意 : `bpId` は元の resourceLocation 全体 (例 `aj:demo_boss`)、 namespace 込みでマクロ展開する。
+これにより bp namespace が `aj` 以外でも対応可能 (例 `mybp:demo_boss/load/step`)。 `with storage`
+は `queue_order[0]` の compound (`{id:"<bpId>"}`) を root として渡し、 `$(id)` でマクロ取り出し。
 
-### 結論
+mcb 構文 (`1.20.4-tsb/global.mcb` の `dir global` 内に追記) :
 
-**構造的には安全**。 `schedule ... replace` で旧 schedule が破棄され、 新 init_queue で queue
-が上書きされるため、 重複実行 / 不整合は起きない。
+```mcb
+IF (tsb_optimized_export && has_animations) {
+    function load_tick minecraft:tick {
+        execute unless data storage aj.global:state d.queue_order[0] run return 0
+        function *global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+    }
+    function load_dispatch_step {
+        $function $(id)/load/step
+    }
+}
+```
 
-ただし以下の注意点 :
+`function on_tick minecraft:tick { ... }` は upstream で既出の mcb 糖衣 (line 24)、 これに倣う。
 
-- 旧 anim NBT のうち、 新 datapack に存在しないアニメは **残骸として残る** (削除されたアニメ)
-- 上書きされるアニメは順次新値に更新 (= 旧値 → 新値の混在状態が一時的に発生するが、 視覚的に問題なし)
-- 削除アニメの残骸を消すには **reload 前に手動 cleanup** が必要 (運用ガイドに明記)
+### cleanup の追加項目
 
-### 実機検証で確認したいこと (Phase D)
+`aj:<bp>/cleanup.mcfunction` の末尾に global state 後始末を追加 :
 
-- [ ] 大きなアニメを load 中に `/reload` を実行 → エラーログが出ないこと
-- [ ] reload 後、 旧 queue の残りが実行されないこと (`schedule replace` が効いていること)
-- [ ] 削除されたアニメの NBT が残骸として残ること、 手動 cleanup で消えること
+```mcfunction
+# 既存 4 行 (per-bp storage の d 配下削除) + remove_animation_objectives 呼び出しに追加
+data remove storage aj.global:state d.queue_order[{}]    # NG: list 内文字列値削除は MC vanilla で不可
+```
 
-## 要決定事項
+問題 : NBT list の string 値削除は MC vanilla 1.20.4 でできない (compound list なら `[{key:value}]` filter 可能、 string list は不可)。
 
-- 案 A / B / C / D のどれを採用するか
-- 実装する場合の優先度 (Phase B-1 系の続編か、 Phase D 実機検証後か)
-- 案 A 採用時 : `aj:global` namespace の取り扱い (upstream 影響範囲、 既存ユーザーへの影響)
+→ 対応 : queue_order を compound list に変更 :
+
+```
+aj.global:state d.queue_order = [
+  {id: "<bp_id_1>"},
+  {id: "<bp_id_2>"},
+  ...
+]
+```
+
+これに合わせて load_dispatch_step も書き換え :
+
+```mcfunction
+# 旧: $function aj:$(queue_order[0])/load/step
+# 新: $function aj:$(id)/load/step  (with storage で queue_order[0] を root に渡す)
+```
+
+dispatch_step の呼び出し側 :
+
+```mcfunction
+# animated_java:global/load_tick
+execute unless data storage aj.global:state d.queue_order[0] run return 0
+function animated_java:global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+```
+
+cleanup での global 削除 :
+
+```mcfunction
+# aj:<bp>/cleanup の末尾
+execute if data storage aj.global:state d.queue_order[{id:"<bp_id>"}] run data remove storage aj.global:state d.queue_order[{id:"<bp_id>"}]
+execute if data storage aj.global:state d.active.<bp_id> run data remove storage aj.global:state d.active.<bp_id>
+```
+
+### force_load の発火条件 (Phase C 実装、 仕様だけ確定)
+
+- 旧案 : `execute if data storage aj.<bp>:anim d.<anim>.bones.0` (SNBT 存在チェック)
+- **新案** : `execute unless data storage aj.<bp>:state d.loaded.<anim>` (loaded フラグ判定)
+
+理由 :
+
+- SNBT 存在チェックは部分 load 中 (一部 cell のみ展開済み) でも true を返す → 不完全な状態で force_load が走らず、 残り cell 未展開のまま再生
+- loaded フラグは最終バッチ末尾で `set value 1b` が立つ → 完全 load 完了の保証
+- Phase C の summon / 戦闘要求側で `execute unless data storage aj.<bp>:state d.loaded.<anim> run function aj:<bp>/force_load/<anim>` の形で呼ぶ
+- force_load 関数自体は既存通り全 expand を順次同期呼び出し (最終バッチで loaded = 1b)
+
+## 各論の根拠
+
+### data modify set value の負荷検証 (MC ソース確認、 2026-05-22)
+
+`/home/ubuntu/mc-decompiled/1.20.4-server/` 調査結果 :
+
+- `DataCommands.java:125` → `NbtPathArgument.java:616-637` (set value 経路)
+- `NbtPathArgument.java:621` で新値を `copy()` (O(N))、 path 終端の `setTag()` で `CompoundTag.put()` (HashMap 単純置換、 O(1))
+- 旧値サイズを参照する経路なし、 merge 系の再帰結合 (`CompoundTag.java:513-529`) には乗らない
+- `StorageDataAccessor.java:53-54` → `CommandStorage.java:38` で HashMap 更新 + `setDirty()` のみ、 block update / event / scoreboard 発火なし
+
+→ **set value は新値サイズに O(N) で単純 replace、 副作用ゼロ**。 リロード時の重複展開 (= 同じ expand 関数が新キューに再度詰まる) が起きても、 結果は等しく、 work は 2 倍になるだけで構造的に破綻しない (= イーラ君の直感は完全に正しかった)。
+
+### ちぇん氏改造版の load 構造調査 (2026-05-22)
+
+`/home/ubuntu/aj-workspace/repos/animated-java-chen/` + `/home/ubuntu/tsb-workspace/repos/Asset-AnimatedJava/AnimatedJava/` 調査結果 :
+
+- 段階展開 (cells_per_tick 概念) は **存在しない** (全 frame data を on_load 時に巨大マクロで storage に詰める方式)
+- `minecraft:tick` タグに `animated_java:global/on_tick` が登録されている (`data/minecraft/tags/functions/tick.json`)、 関数タグ `animated_java:global/root/on_tick` に全 blueprint の on_tick を集約
+- force_load 判定は `IS_RIG_LOADED` scoreboard フラグ ベース (`animation.mcb:42` で `execute unless score @s ... matches 1 run function #*global/root/on_load`)
+- リロード時 cleanup は `kill @e[tag=<%TAGS.GLOBAL_ENTITY()%>]` のグローバルタグ kill 一発 (storage queue / delay reset なし、 全 rig 再 summon )
+
+→ ちぇん氏設計は「全 blueprint が minecraft:tick タグ経由で毎 tick 全実行」 で、 段階展開や budget 管理は未実装。 我々の Phase B-1.5 は **段階展開を保ちつつグローバル化** する点で完全新規領域だが、 「`minecraft:tick` タグで global on_tick を常駐」 という骨格はちぇん氏改造と同じ路線。
+
+### 旧案 A〜D との対比
+
+| 案 | 対比 | 採用 |
+|---|---|---|
+| A. global schedule (集中制御) | namespace `aj:global` 導入を保留して `animated_java:global` 流用に切替、 schedule → minecraft:tick タグに変更、 per-bp queue + active list の構造を追加 | △ (発展形 = 案 A' で採用) |
+| B. cells_per_tick の共有 budget | order/active 構造で round-robin、 budget 共有は実質達成 | △ (案 A' に統合) |
+| C. 順次ロード (1 bp ずつ完走) | round-robin で公平性確保、 「先着優先で他 bp が待つ」 問題を回避 | × (案 A' で公平性優先) |
+| D. 現状維持 + 運用ガイド | Phase D 待ちで先延ばしせず、 段階展開と並行で Phase B-1.5 で実装 | × |
+
+### load 中 reload の挙動 (確認結果)
+
+旧設計検討 (案 D 時) からの結論を維持 :
+
+1. 旧 datapack の load/tick (= 旧 step) が動作中
+2. `/reload` 実行 → 新 datapack の on_load → 新 init_queue
+3. 新 init_queue で **自 bp queue は `set value` で完全上書き** (旧残骸は消える、 削除アニメへの参照も消える)
+4. 新 init_queue で **global active に対しては `unless` ガード経由で append**、 既に登録済みなら何もしない
+5. 旧 schedule は不在 (= 廃止)、 minecraft:tick タグの load_tick が常駐し続けるため、 reload を跨いで継続動作
+
+→ schedule 不在 = `schedule ... replace` の取り扱いを考えなくて良い (イーラ君が懸念していた点を解消)。
+
+reload 中に進行中だった expand が中断された場合の挙動 :
+- expand 関数 (= バッチ N の `set value` 行) は単一 mcfunction の中で実行、 atomic
+- pop した時点で queue から削除済み、 reload 後の新 queue は同じバッチを再度 pop する (= バッチ N が新 queue で先頭にあるなら 2 重実行、 結果整合的 / 一致しないなら旧 N 分はロスト、 ただし新 queue が完全 reload なので不問)
+- 進行中バッチが新 datapack 上で削除されていても、 `function ... not found` エラーは出ない (= 自 bp queue を完全上書きで該当参照が消えるため)
+
+### アイドル時の常駐コスト
+
+`animated_java:global/load_tick` を毎 tick 走らせる場合のアイドル時負荷 :
+
+- 中身 : `execute unless data storage aj.global:state d.queue_order[0] run return 0` の 1 命令 (条件 false 時は次行を実行、 condition true 時は早期 return)
+- アイドル時 (queue_order が空) : 1 命令で return → 数 μs オーダー
+- schedule 方式と比較 : schedule のアイドル時は 0 命令 だが、 reload 時の `schedule replace` 取り扱いコストが追加
+- ちぇん氏改造版の `animated_java:global/on_tick` も同じ規模で常駐 → 既存運用で実績あり
+
+→ 許容範囲 (実機での影響は無視できる)。
+
+## 未決事項 / 残課題
+
+- [ ] queue_order を compound list (`[{id:"<bp>"}]`) で持つ仕様、 storage spec に反映 ([[aj-phase-a-spec]] の state フォーマットセクション更新要)
+- [ ] cells_per_tick の解釈を「1 expand 関数 (= 1 step pop) に詰める cell 上限」 で確定、 docs 明記
+- [ ] 実機検証 (Phase D) : 2 体以上の bp を同時 reload して、 全体 budget が 1 expand /tick に収まること確認
+- [ ] Phase B-1.5 完了後の `aj.global:state` 残留チェック (datapack 全削除時の手動 cleanup 推奨を README に明記)
+
+## 関連ドキュメント
+
+- 上位仕様 : `~/docs-workspace/next-tasks/animated-java-optimization.md`
+- 出力サンプル : `~/docs-workspace/animated-java/tsb-output-sample.md`
+- 検証手順 : `~/docs-workspace/animated-java/tsb-phase-b1-verification.md`
+- 設計経緯 : 本ファイル
+- cleanup の経緯 : `cleanup-on-load-removed.md` (on_load 自動 cleanup 削除)
+- データ remove 構文の経緯 : `cleanup-data-remove-syntax.md` (ラッパー段 d 導入)

@@ -7,6 +7,11 @@ import { decomposeTsb, type DecomposedTsb } from './decomposeTsb'
 
 const BONE_TYPES = ['bone', 'text_display', 'item_display', 'block_display']
 
+// TSB Optimized Export の global キュー管理用 storage。 全 blueprint 共有、 minecraft:tick タグに
+// 登録した animated_java:global/load_tick がここを監視して round-robin で各 bp の load/step を呼ぶ。
+// 詳細 : docs/tsb-known-issues/parallel-project-load.md。
+const GLOBAL_STORAGE_NS = 'aj.global'
+
 export interface CreateAnimationStorageTsbOptions {
 	blueprintId: string
 	quantizationDigits: number
@@ -49,7 +54,7 @@ export async function createAnimationStorageTsb(
 		content: buildIdMappingComment(idMap, opts.blueprintId),
 	})
 	files.set(`${fnPathPrefix}/cleanup.mcfunction`, {
-		content: buildCleanup(storageNs, animations, fnRef),
+		content: buildCleanup(storageNs, opts.blueprintId, animations, fnRef),
 	})
 
 	const expandRefsByAnim: { anim: string; refs: string[] }[] = []
@@ -82,10 +87,21 @@ export async function createAnimationStorageTsb(
 	}
 
 	files.set(`${fnPathPrefix}/load/init_queue.mcfunction`, {
-		content: buildInitQueue(expandRefsByAnim, variantsExpandRefs, storageNs, fnRef),
+		content: buildInitQueue(
+			expandRefsByAnim,
+			variantsExpandRefs,
+			storageNs,
+			opts.blueprintId
+		),
 	})
-	files.set(`${fnPathPrefix}/load/tick.mcfunction`, {
-		content: buildLoadTick(storageNs, fnRef),
+	files.set(`${fnPathPrefix}/load/step.mcfunction`, {
+		content: buildLoadStep(storageNs, fnRef),
+	})
+	files.set(`${fnPathPrefix}/load/rotate_active.mcfunction`, {
+		content: buildRotateActive(opts.blueprintId),
+	})
+	files.set(`${fnPathPrefix}/load/remove_from_global.mcfunction`, {
+		content: buildRemoveFromGlobal(opts.blueprintId),
 	})
 	files.set(`${fnPathPrefix}/load/pop/immediate.mcfunction`, {
 		content: buildPop('immediate', storageNs, fnRef),
@@ -141,6 +157,7 @@ function buildIdMappingComment(idMap: IdMap, blueprintId: string): string {
 
 function buildCleanup(
 	storageNs: string,
+	bpId: string,
 	animations: IRenderedAnimation[],
 	fnRef: string
 ): string {
@@ -150,7 +167,16 @@ function buildCleanup(
 	const storageLines = kinds.map(
 		k => `execute if data storage ${storageNs}:${k} d run data remove storage ${storageNs}:${k} d`
 	)
-	const lines: string[] = [...storageLines]
+	// global キュー管理 storage 内の自 bp 痕跡も削除 (queue_order 内の {id:<bpId>} compound + active.<bpId>)。
+	// 他 bp の登録には触らない (active list / queue_order は全 bp 共有なので bp 単位で部分削除する)。
+	const bpIdLit = `"${escapeNbtString(bpId)}"`
+	const orderSelector = `${GLOBAL_STORAGE_NS}:state d.queue_order[{id:${bpIdLit}}]`
+	const activeRef = `${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}`
+	const globalLines = [
+		`execute if data storage ${orderSelector} run data remove storage ${orderSelector}`,
+		`execute if data storage ${activeRef} run data remove storage ${activeRef}`,
+	]
+	const lines: string[] = [...storageLines, ...globalLines]
 	// animation 単位の scoreboard objective 削除は AJ 既存の `remove_animation_objectives` を流用 (DRY)。
 	// `tsb_silent_uninstall` フラグで UNINSTALL tellraw 抑制可。
 	// 関数が生成されるのは has_animations のときだけなので、 animations が空なら呼ばない。
@@ -350,7 +376,7 @@ function buildInitQueue(
 	expandRefsByAnim: { anim: string; refs: string[] }[],
 	variantsExpandRefs: string[],
 	storageNs: string,
-	fnRef: string
+	bpId: string
 ): string {
 	const immediate: string[] = []
 	const high: string[] = []
@@ -361,30 +387,65 @@ function buildInitQueue(
 	const formatList = (arr: string[]): string =>
 		arr.length === 0 ? '[]' : `[${arr.map(r => `"${r}"`).join(',')}]`
 
+	// 自 bp queue を完全上書き。 旧 datapack で展開途中だったキューの残骸は data modify set value
+	// の単純 replace で破棄される (MC ソース確認 : NbtPathArgument.java:621 の deep copy + CompoundTag.put、
+	// O(N) で副作用なし、 merge 経路に乗らない)。 削除アニメへの古い expand 参照もここで消える。
 	const lines = [
 		`data modify storage ${storageNs}:state d.queue.immediate set value ${formatList(immediate)}`,
 		`data modify storage ${storageNs}:state d.queue.high set value ${formatList(high)}`,
 		`data modify storage ${storageNs}:state d.queue.low set value ${formatList(low)}`,
 	]
 	if (immediate.length + high.length + low.length > 0) {
-		lines.push(`schedule function ${fnRef}/load/tick 1t replace`)
+		// global active set に自分を登録 (重複ガード) + queue_order に compound エントリで append。
+		// queue_order は compound list ({id:"<bp>"}) なので、 cleanup 時 [{id:"<bp>"}] selector で
+		// 値一致削除できる (string list だと値一致削除が MC vanilla で不可)。
+		// schedule は不要 : animated_java:global/load_tick が minecraft:tick タグで常駐し、
+		// queue_order を毎 tick 監視して round-robin で各 bp の load/step を呼ぶ。
+		const bpIdLit = `"${escapeNbtString(bpId)}"`
+		lines.push(
+			`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit} run data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order append value {id:${bpIdLit}}`,
+			`data modify storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit} set value 1b`
+		)
 	}
 	return lines.join('\n') + '\n'
 }
 
-function buildLoadTick(storageNs: string, fnRef: string): string {
+function buildLoadStep(storageNs: string, fnRef: string): string {
 	const im = `${storageNs}:state d.queue.immediate[0]`
 	const hi = `${storageNs}:state d.queue.high[0]`
 	const lo = `${storageNs}:state d.queue.low[0]`
+	// 1 step = 1 pop + dispatch。 末尾で自 bp queue 残量を見て、 残っているなら round-robin
+	// (先頭の自エントリを末尾に移動)、 全空なら global active list から自分を削除する。
 	return (
 		[
 			`execute if data storage ${im} run return run function ${fnRef}/load/pop/immediate`,
 			`execute if data storage ${hi} run return run function ${fnRef}/load/pop/high`,
 			`execute if data storage ${lo} run function ${fnRef}/load/pop/low`,
 			``,
-			`execute if data storage ${im} run schedule function ${fnRef}/load/tick 1t replace`,
-			`execute unless data storage ${im} if data storage ${hi} run schedule function ${fnRef}/load/tick 1t replace`,
-			`execute unless data storage ${im} unless data storage ${hi} if data storage ${lo} run schedule function ${fnRef}/load/tick 1t replace`,
+			`execute if data storage ${im} run return run function ${fnRef}/load/rotate_active`,
+			`execute if data storage ${hi} run return run function ${fnRef}/load/rotate_active`,
+			`execute if data storage ${lo} run return run function ${fnRef}/load/rotate_active`,
+			`function ${fnRef}/load/remove_from_global`,
+		].join('\n') + '\n'
+	)
+}
+
+function buildRotateActive(bpId: string): string {
+	const bpIdLit = `"${escapeNbtString(bpId)}"`
+	return (
+		[
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order[0]`,
+			`data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order append value {id:${bpIdLit}}`,
+		].join('\n') + '\n'
+	)
+}
+
+function buildRemoveFromGlobal(bpId: string): string {
+	const bpIdLit = `"${escapeNbtString(bpId)}"`
+	return (
+		[
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order[0]`,
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}`,
 		].join('\n') + '\n'
 	)
 }
