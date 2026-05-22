@@ -8,9 +8,13 @@ import { decomposeTsb, type DecomposedTsb } from './decomposeTsb'
 const BONE_TYPES = ['bone', 'text_display', 'item_display', 'block_display']
 
 // TSB Optimized Export の global キュー管理用 storage。 全 blueprint 共有、 minecraft:tick タグに
-// 登録した animated_java:global/load_tick がここを監視して round-robin で各 bp の load/step を呼ぶ。
-// 詳細 : docs/tsb-known-issues/parallel-project-load.md。
+// 登録した animated_java:global/load_tick がここを監視して priority 別に round-robin で各 bp の
+// load/step/<priority> を呼ぶ。 詳細 : docs/tsb-known-issues/parallel-project-load.md。
 const GLOBAL_STORAGE_NS = 'aj.global'
+
+// priority レベル。 immediate → high → low の順で消化、 同 priority 内は round-robin。
+const PRIORITIES = ['immediate', 'high', 'low'] as const
+type Priority = (typeof PRIORITIES)[number]
 
 export interface CreateAnimationStorageTsbOptions {
 	blueprintId: string
@@ -94,24 +98,20 @@ export async function createAnimationStorageTsb(
 			opts.blueprintId
 		),
 	})
-	files.set(`${fnPathPrefix}/load/step.mcfunction`, {
-		content: buildLoadStep(storageNs, fnRef),
-	})
-	files.set(`${fnPathPrefix}/load/rotate_active.mcfunction`, {
-		content: buildRotateActive(opts.blueprintId),
-	})
-	files.set(`${fnPathPrefix}/load/remove_from_global.mcfunction`, {
-		content: buildRemoveFromGlobal(opts.blueprintId),
-	})
-	files.set(`${fnPathPrefix}/load/pop/immediate.mcfunction`, {
-		content: buildPop('immediate', storageNs, fnRef),
-	})
-	files.set(`${fnPathPrefix}/load/pop/high.mcfunction`, {
-		content: buildPop('high', storageNs, fnRef),
-	})
-	files.set(`${fnPathPrefix}/load/pop/low.mcfunction`, {
-		content: buildPop('low', storageNs, fnRef),
-	})
+	for (const pri of PRIORITIES) {
+		files.set(`${fnPathPrefix}/load/step/${pri}.mcfunction`, {
+			content: buildLoadStep(pri, storageNs, fnRef),
+		})
+		files.set(`${fnPathPrefix}/load/rotate_active/${pri}.mcfunction`, {
+			content: buildRotateActive(pri, opts.blueprintId),
+		})
+		files.set(`${fnPathPrefix}/load/remove_from_priority/${pri}.mcfunction`, {
+			content: buildRemoveFromPriority(pri, opts.blueprintId),
+		})
+		files.set(`${fnPathPrefix}/load/pop/${pri}.mcfunction`, {
+			content: buildPop(pri, storageNs, fnRef),
+		})
+	}
 	files.set(`${fnPathPrefix}/load/dispatch.mcfunction`, {
 		content: buildDispatch(),
 	})
@@ -167,15 +167,21 @@ function buildCleanup(
 	const storageLines = kinds.map(
 		k => `execute if data storage ${storageNs}:${k} d run data remove storage ${storageNs}:${k} d`
 	)
-	// global キュー管理 storage 内の自 bp 痕跡も削除 (queue_order 内の {id:<bpId>} compound + active.<bpId>)。
-	// 他 bp の登録には触らない (active list / queue_order は全 bp 共有なので bp 単位で部分削除する)。
+	// global キュー管理 storage 内の自 bp 痕跡を削除。 3 priority 別 queue_order に compound 入りうるので
+	// 各 priority 別に値一致削除する。 active membership は per-bp の compound (= 3 priority キー子)。
+	// 最後に has_work フラグも全 priority 空チェックで条件 remove (= 完全 idle 状態に戻る)。
 	const bpIdLit = `"${escapeNbtString(bpId)}"`
-	const orderSelector = `${GLOBAL_STORAGE_NS}:state d.queue_order[{id:${bpIdLit}}]`
-	const activeRef = `${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}`
-	const globalLines = [
-		`execute if data storage ${orderSelector} run data remove storage ${orderSelector}`,
-		`execute if data storage ${activeRef} run data remove storage ${activeRef}`,
-	]
+	const globalLines: string[] = []
+	for (const pri of PRIORITIES) {
+		const orderSelector = `${GLOBAL_STORAGE_NS}:state d.queue_order.${pri}[{id:${bpIdLit}}]`
+		globalLines.push(
+			`execute if data storage ${orderSelector} run data remove storage ${orderSelector}`
+		)
+	}
+	globalLines.push(
+		`execute if data storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit} run data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}`,
+		`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.immediate[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.high[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.low[0] run data remove storage ${GLOBAL_STORAGE_NS}:state d.has_work`
+	)
 	const lines: string[] = [...storageLines, ...globalLines]
 	// animation 単位の scoreboard objective 削除は AJ 既存の `remove_animation_objectives` を流用 (DRY)。
 	// `tsb_silent_uninstall` フラグで UNINSTALL tellraw 抑制可。
@@ -378,74 +384,80 @@ function buildInitQueue(
 	storageNs: string,
 	bpId: string
 ): string {
-	const immediate: string[] = []
-	const high: string[] = []
-	const low: string[] = []
-	for (const { refs } of expandRefsByAnim) low.push(...refs)
-	for (const v of variantsExpandRefs) low.push(v)
+	const buckets: Record<Priority, string[]> = { immediate: [], high: [], low: [] }
+	// Phase B-1 暫定 : priority UI 未実装のため、 全アニメ + variant を low に積む。
+	// Phase B-1.6 (UI 拡張) で immediate / high への振り分けを導入予定。
+	for (const { refs } of expandRefsByAnim) buckets.low.push(...refs)
+	for (const v of variantsExpandRefs) buckets.low.push(v)
 
 	const formatList = (arr: string[]): string =>
 		arr.length === 0 ? '[]' : `[${arr.map(r => `"${r}"`).join(',')}]`
 
-	// 自 bp queue を完全上書き。 旧 datapack で展開途中だったキューの残骸は data modify set value
-	// の単純 replace で破棄される (MC ソース確認 : NbtPathArgument.java:621 の deep copy + CompoundTag.put、
-	// O(N) で副作用なし、 merge 経路に乗らない)。 削除アニメへの古い expand 参照もここで消える。
-	const lines = [
-		`data modify storage ${storageNs}:state d.queue.immediate set value ${formatList(immediate)}`,
-		`data modify storage ${storageNs}:state d.queue.high set value ${formatList(high)}`,
-		`data modify storage ${storageNs}:state d.queue.low set value ${formatList(low)}`,
-	]
-	if (immediate.length + high.length + low.length > 0) {
-		// global active set に自分を登録 (重複ガード) + queue_order に compound エントリで append。
-		// queue_order は compound list ({id:"<bp>"}) なので、 cleanup 時 [{id:"<bp>"}] selector で
-		// 値一致削除できる (string list だと値一致削除が MC vanilla で不可)。
-		// schedule は不要 : animated_java:global/load_tick が minecraft:tick タグで常駐し、
-		// queue_order を毎 tick 監視して round-robin で各 bp の load/step を呼ぶ。
-		const bpIdLit = `"${escapeNbtString(bpId)}"`
+	const bpIdLit = `"${escapeNbtString(bpId)}"`
+	const lines: string[] = []
+
+	// 1. per-bp queue を 3 priority 別に完全上書き。 set value は MC ソース上 O(N) 単純 replace
+	//    で副作用なし、 旧 datapack の残骸 (削除アニメへの expand 参照含む) は破棄される。
+	for (const pri of PRIORITIES) {
 		lines.push(
-			`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit} run data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order append value {id:${bpIdLit}}`,
-			`data modify storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit} set value 1b`
+			`data modify storage ${storageNs}:state d.queue.${pri} set value ${formatList(buckets[pri])}`
 		)
 	}
+
+	// 2. ビルド時に該当 priority に値があるかは静的判定可能 → 該当 priority だけ global に登録。
+	//    queue_order は priority 別の compound list、 active.<bpId>.<pri> = 1b で重複ガード。
+	let hasAnyWork = false
+	for (const pri of PRIORITIES) {
+		if (buckets[pri].length === 0) continue
+		hasAnyWork = true
+		lines.push(
+			`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}.${pri} run data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${pri} append value {id:${bpIdLit}}`,
+			`data modify storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}.${pri} set value 1b`
+		)
+	}
+
+	// 3. work がある場合のみ has_work フラグ立てる。 minecraft:tick タグの load_tick はアイドル時
+	//    このフラグだけ見て 1 命令で return するため、 ロード走行外のオーバーヘッドはほぼゼロ。
+	if (hasAnyWork) {
+		lines.push(`data modify storage ${GLOBAL_STORAGE_NS}:state d.has_work set value 1b`)
+	}
+
 	return lines.join('\n') + '\n'
 }
 
-function buildLoadStep(storageNs: string, fnRef: string): string {
-	const im = `${storageNs}:state d.queue.immediate[0]`
-	const hi = `${storageNs}:state d.queue.high[0]`
-	const lo = `${storageNs}:state d.queue.low[0]`
-	// 1 step = 1 pop + dispatch。 末尾で自 bp queue 残量を見て、 残っているなら round-robin
-	// (先頭の自エントリを末尾に移動)、 全空なら global active list から自分を削除する。
+function buildLoadStep(priority: Priority, storageNs: string, fnRef: string): string {
+	const head = `${storageNs}:state d.queue.${priority}[0]`
+	// step は dispatch から「自 bp の該当 priority に必ず work がある」 invariant 下で呼ばれる :
+	//   global load_tick で queue_order.<pri>[0] = この bp が選ばれた = active.<bp>.<pri> = 1b。
+	// 1 step = pop 1 件 + 残量判定で rotate (round-robin) or remove_from_priority。
 	return (
 		[
-			`execute if data storage ${im} run return run function ${fnRef}/load/pop/immediate`,
-			`execute if data storage ${hi} run return run function ${fnRef}/load/pop/high`,
-			`execute if data storage ${lo} run function ${fnRef}/load/pop/low`,
-			``,
-			`execute if data storage ${im} run return run function ${fnRef}/load/rotate_active`,
-			`execute if data storage ${hi} run return run function ${fnRef}/load/rotate_active`,
-			`execute if data storage ${lo} run return run function ${fnRef}/load/rotate_active`,
-			`function ${fnRef}/load/remove_from_global`,
+			`function ${fnRef}/load/pop/${priority}`,
+			`execute if data storage ${head} run return run function ${fnRef}/load/rotate_active/${priority}`,
+			`function ${fnRef}/load/remove_from_priority/${priority}`,
 		].join('\n') + '\n'
 	)
 }
 
-function buildRotateActive(bpId: string): string {
+function buildRotateActive(priority: Priority, bpId: string): string {
 	const bpIdLit = `"${escapeNbtString(bpId)}"`
 	return (
 		[
-			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order[0]`,
-			`data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order append value {id:${bpIdLit}}`,
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${priority}[0]`,
+			`data modify storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${priority} append value {id:${bpIdLit}}`,
 		].join('\n') + '\n'
 	)
 }
 
-function buildRemoveFromGlobal(bpId: string): string {
+function buildRemoveFromPriority(priority: Priority, bpId: string): string {
 	const bpIdLit = `"${escapeNbtString(bpId)}"`
 	return (
 		[
-			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order[0]`,
-			`data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}`,
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${priority}[0]`,
+			`data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}.${priority}`,
+			// 全 3 priority の queue_order が空 = 全 bp の全 priority work 消化 → has_work クリア
+			// (= load_tick はアイドルに戻り、 次 reload まで 1 命令 return 状態)。
+			`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.immediate[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.high[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.low[0] run data remove storage ${GLOBAL_STORAGE_NS}:state d.has_work`,
 		].join('\n') + '\n'
 	)
 }

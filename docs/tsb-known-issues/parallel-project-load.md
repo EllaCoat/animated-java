@@ -13,60 +13,92 @@
 **全体 budget が N × cells_per_tick に線形比例して膨らむ**。 開発時の同時 reload や、
 今後プロジェクト数が増えた際に顕在化する。
 
-## 採用方針: 案 A' (global active list + minecraft:tick タグ駆動 + per-bp queue + round-robin)
+## 採用方針: 案 A'' (priority-aware global round-robin + has_work アイドルガード)
 
 「キュー global 管理 + tag/tick.json で監視 + force_load は loaded フラグ判定」 という
-イーラ君提案 (2026-05-22 メッセージ) を、 リロード安全性を考慮して per-bp 区切り + active
-list 方式に展開した形。 ちぇん氏改造版が `animated_java:global/on_tick` を `minecraft:tick`
-タグ経由で常駐させていた設計と整合的。
+イーラ君提案 (2026-05-22 第 1 メッセージ) + 「priority-aware で immediate → high → low の
+global 整合を取る」 イーラ君追加要件 (2026-05-22 第 2 メッセージ) を、 リロード安全性を考慮
+して per-bp 区切り + priority 別 active / queue_order + has_work アイドルガード方式に展開。
+ちぇん氏改造版が `animated_java:global/on_tick` を `minecraft:tick` タグ経由で常駐させて
+いた設計と整合的。
 
-### 全体構造
+### 案 A' (per-bp round-robin、 priority 非対応) からの差分
+
+案 A' では bp 単位 round-robin だったため、 `axia.low` と `boss_b.immediate` が並ぶケースで
+`axia.low` が `boss_b.immediate` より先に処理される priority 整合性崩れがあった。 案 A'' は
+priority 別に queue_order を 3 本に分けて、 global load_tick で immediate → high → low の
+順に走査することで「全 bp の immediate を消化 → 全 bp の high → 全 bp の low」 の global
+priority 順序を保証する。 priority 内では bp 間 round-robin を維持。
+
+加えてアイドル時のコスト削減として `aj.global:state d.has_work` フラグを導入、 load_tick は
+アイドル時このフラグ存在チェック 1 命令のみで即 return (priority 3 段判定はスキップ)。
+
+### 全体構造 (priority-aware)
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│ aj.global:state  (TSB バリアントの新規 storage、 全 bp 共有)              │
-│   d.active = {                                                          │
-│     <bp_id_1>: 1b,   # membership set (重複登録ガード用)                  │
-│     <bp_id_2>: 1b,                                                      │
-│     ...                                                                 │
-│   }                                                                     │
-│   d.queue_order = [                                                     │
-│     "<bp_id_1>", "<bp_id_2>", ...   # 巡回順序 (round-robin 用、 list)   │
-│   ]                                                                     │
-└─────────────────────────────────────────────────────────────────────────┘
-            ▲ append (重複ガード)
-            │                                  ▼ 先頭を読んで dispatch
-┌──────────────────────┐   ┌──────────────────────────────────────────┐
-│ aj:<bp>/load/init_queue│   │ animated_java:global/load_tick (minecraft:tick)│
-│ ─ 自 bp queue を上書き│   │ ─ queue_order[0] が無ければ早期 return        │
-│ ─ global active 登録 │   │ ─ ある場合 dispatch_step を呼ぶ                │
-└──────────────────────┘   │ ─ dispatch_step が                              │
-                           │     $function aj:$(queue_order[0])/load/step    │
-                           └──────────────────────────────────────────┘
-                                                  │
-                                                  ▼
-                              ┌──────────────────────────────────────────┐
-                              │ aj:<bp>/load/step (per-bp)              │
-                              │ ─ immediate→high→low の 1 pop + dispatch│
-                              │ ─ 末尾で queue 残量を判定               │
-                              │   ─ 残ってる→rotate_active (round-robin)│
-                              │   ─ 空 → remove_from_global             │
-                              └──────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────┐
+│ aj.global:state  (TSB バリアントの新規 storage、 全 bp 共有)               │
+│   d.has_work = 1b   # アイドル時はキーごと存在しない (load_tick 早期 return) │
+│   d.active = {                                                           │
+│     "<bpId_1>": { immediate:1b, high:1b, low:1b },  # priority 別 membership │
+│     "<bpId_2>": { immediate:1b }                                          │
+│   }                                                                      │
+│   d.queue_order = {                                                      │
+│     immediate: [{id:"<bpId>"}, ...],   # priority 別の手番リスト         │
+│     high:      [{id:"<bpId>"}, ...],                                     │
+│     low:       [{id:"<bpId>"}, ...]                                      │
+│   }                                                                      │
+└──────────────────────────────────────────────────────────────────────────┘
+            ▲ 該当 priority に値があれば append (重複ガード)
+            │
+┌──────────────────────────┐
+│ aj:<bp>/load/init_queue   │
+│ ─ 自 bp queue を 3 priority 上書き │
+│ ─ 値ある priority だけ global 登録 │
+│ ─ 1 つでも work あれば has_work=1b │
+└──────────────────────────┘
+                                  ▼ 毎 tick (minecraft:tick)
+                  ┌────────────────────────────────────────────────┐
+                  │ animated_java:global/load_tick                  │
+                  │ 1. has_work 無ければ即 return (1 命令でアイドル) │
+                  │ 2. queue_order.immediate[0] あれば → dispatch_step/immediate │
+                  │ 3. なければ queue_order.high[0]   → dispatch_step/high      │
+                  │ 4. なければ queue_order.low[0]    → dispatch_step/low       │
+                  └────────────────────────────────────────────────┘
+                                  │ with storage で compound {id:"<bpId>"} を root 渡し
+                                  ▼
+                  ┌────────────────────────────────────────────────┐
+                  │ animated_java:global/load_dispatch_step/<pri>   │
+                  │   $function $(id)/load/step/<pri>               │
+                  └────────────────────────────────────────────────┘
+                                  │
+                                  ▼
+                  ┌────────────────────────────────────────────────┐
+                  │ aj:<bp>/load/step/<pri>                         │
+                  │ ─ function aj:<bp>/load/pop/<pri>  (1 件 pop)   │
+                  │ ─ 残量あり → rotate_active/<pri> (round-robin)  │
+                  │ ─ 残量なし → remove_from_priority/<pri>          │
+                  │              ↳ queue_order/active から削除      │
+                  │              ↳ 全 3 priority 空なら has_work 削除 │
+                  └────────────────────────────────────────────────┘
 ```
 
-### 関数 API (TSB バリアント、 1.20.4-tsb/ で生成)
+### 関数 API (TSB バリアント、 1.20.4-tsb/ で生成、 priority-aware)
 
 | 関数 | 配置 | 役割 |
 |---|---|---|
-| `animated_java:global/load_tick` | global.mcb で生成、 `minecraft:tick` タグに登録 | 毎 tick `aj.global:state d.queue_order[0]` を確認、 あれば dispatch_step を呼ぶ |
-| `animated_java:global/load_dispatch_step` | global.mcb で生成 | `$function aj:$(queue_order[0])/load/step` でマクロ展開 |
-| `aj:<bp>/load/init_queue` | createAnimationStorageTsb で生成 (per-bp) | 自 bp queue を `set value` で上書き + global active membership ガード + queue_order append (重複登録なし) |
-| `aj:<bp>/load/step` | createAnimationStorageTsb で生成 (per-bp) | 既存 load/tick の 1 pop ロジック + 末尾で rotate_active / remove_from_global の分岐 |
-| `aj:<bp>/load/rotate_active` | createAnimationStorageTsb で生成 (per-bp) | `data remove ... queue_order[0]` + `data modify ... queue_order append "<bp_id>"` |
-| `aj:<bp>/load/remove_from_global` | createAnimationStorageTsb で生成 (per-bp) | `data remove ... queue_order[0]` + `data remove ... active.<bp_id>` |
+| `animated_java:global/load_tick` | global.mcb で生成、 `minecraft:tick` タグに登録 | アイドル時 `has_work` 無 → 即 return。 work 時 immediate → high → low の順で先頭 bp を選び dispatch_step/<pri> を呼ぶ |
+| `animated_java:global/load_dispatch_step/{immediate,high,low}` | global.mcb で生成 (3 関数) | `$function $(id)/load/step/<pri>` でマクロ展開 |
+| `aj:<bp>/load/init_queue` | createAnimationStorageTsb で生成 (per-bp) | 自 bp queue を `set value` で 3 priority 別に上書き + 値ある priority だけ global active 重複ガード + queue_order append + has_work set |
+| `aj:<bp>/load/step/{immediate,high,low}` | createAnimationStorageTsb で生成 (per-bp、 3 ファイル) | 該当 priority の pop 1 件 + 残量で rotate_active/<pri> or remove_from_priority/<pri> 分岐 |
+| `aj:<bp>/load/rotate_active/{immediate,high,low}` | createAnimationStorageTsb で生成 (per-bp、 3 ファイル) | `queue_order.<pri>[0]` 削除 → 末尾 append (round-robin) |
+| `aj:<bp>/load/remove_from_priority/{immediate,high,low}` | createAnimationStorageTsb で生成 (per-bp、 3 ファイル) | `queue_order.<pri>[0]` 削除 + `active.<bpId>.<pri>` 削除 + 全 3 priority 空チェックで has_work クリア |
 | `aj:<bp>/load/pop/{immediate,high,low}` | 既存維持 | 既存ロジック (queue から先頭を取って dispatch) |
 | `aj:<bp>/load/dispatch` | 既存維持 | `$function $(pop) {_: ""}` 既存マクロ展開 |
 | `aj:<bp>/load/tick` | **削除** | 旧 schedule 自己再帰版は廃止 |
+| `aj:<bp>/load/step` (単一) | **削除** | 案 A' で導入したが priority-aware 化で `step/<pri>` 3 ファイルに展開 |
+| `aj:<bp>/load/rotate_active` (単一) | **削除** | 同上 |
+| `aj:<bp>/load/remove_from_global` | **削除** | `remove_from_priority/<pri>` に置き換え (priority 単位の削除になった) |
 
 ### namespace 設計判断
 
@@ -74,134 +106,134 @@ list 方式に展開した形。 ちぇん氏改造版が `animated_java:global/
 - storage namespace : **`aj.global:state`** を新設 (per-bp の `aj.<bp>:state` と同じ系統で命名統一)
 - 関数だけ namespace 不一致になるが、 mcb の dir 機構で素直に書ける優先 + upstream への影響を最小化 (TSB バリアントのみ load_tick / load_dispatch_step が増えるだけ、 既存関数は無改変)
 
-### init_queue の改修詳細
+### init_queue の改修詳細 (priority-aware)
+
+ビルド時に「該当 priority に値があるか」 を静的判定し、 値ある priority だけ global 登録行を生成。
+demo_boss のように全アニメが low に積まれる場合、 immediate / high への register 行は出力されない。
 
 ```mcfunction
 # aj:<bp>/load/init_queue
 
-# 自 bp queue を完全上書き (リロード時の旧残骸を消す、 set value は MC ソース確認で O(N) 単純 replace)
-data modify storage aj.<bp>:state d.queue.immediate set value []
-data modify storage aj.<bp>:state d.queue.high set value []
-data modify storage aj.<bp>:state d.queue.low set value ["<expand_ref_1>", "<expand_ref_2>", ...]
+# 1. 自 bp queue を 3 priority 別に完全上書き (MC ソース確認 : set value は O(N) 単純 replace)
+data modify storage aj.<bp>:state d.queue.immediate set value [...]
+data modify storage aj.<bp>:state d.queue.high set value [...]
+data modify storage aj.<bp>:state d.queue.low set value ["<expand_ref_1>", ...]
 
-# global active membership 重複ガード (リロードで二重登録しない)
-execute unless data storage aj.global:state d.active.<bp_id> run data modify storage aj.global:state d.queue_order append value "<bp_id>"
-data modify storage aj.global:state d.active.<bp_id> set value 1b
+# 2. 該当 priority に値がある場合のみ global に登録 (重複ガード)
+#    (immediate / high が空のときは以下 immediate / high 行は生成されない)
+execute unless data storage aj.global:state d.active."<bp_id>".low run data modify storage aj.global:state d.queue_order.low append value {id:"<bp_id>"}
+data modify storage aj.global:state d.active."<bp_id>".low set value 1b
 
-# schedule は不要 (global load_tick が minecraft:tick タグで常駐監視)
+# 3. work があるなら has_work フラグ (load_tick のアイドルガード)
+data modify storage aj.global:state d.has_work set value 1b
 ```
 
 注意点 :
 
 - queue 上書きは `set value` (MC ソース上 O(N) 単純 replace、 副作用なし、 merge 経路に乗らない、 `NbtPathArgument.java:621` で 1 度 `copy()` + `CompoundTag.java:214` で HashMap 置換)
 - リロードで旧 queue 残骸が消える + 削除アニメへの古い expand 参照も消える (= 不存在 function 呼び出しエラーを未然に防ぐ)
-- active membership は `aj.global:state d.active.<bp_id>` の compound key で持つので、 list 内の値検査を回避
+- active membership は `aj.global:state d.active."<bp_id>".<pri>` の compound 構造、 list 内の値検査を回避
+- `has_work` は冪等な `set value 1b` なので重複 reload でも問題なし
 
-### step の改修詳細
+### step の改修詳細 (priority 別 3 ファイル)
+
+dispatch は priority を引数に取らず、 関数名末尾 (`/immediate` / `/high` / `/low`) で priority を
+静的に固定する。 これにより each step ファイルは 3 行で済む。
 
 ```mcfunction
-# aj:<bp>/load/step (旧 load/tick の置き換え)
+# aj:<bp>/load/step/<pri>  (immediate / high / low の 3 ファイル、 <pri> は静的)
 
-# 既存 load/tick と同じ 1 pop ロジック (immediate → high → low の優先度)
-execute if data storage aj.<bp>:state d.queue.immediate[0] run return run function aj:<bp>/load/pop/immediate
-execute if data storage aj.<bp>:state d.queue.high[0] run return run function aj:<bp>/load/pop/high
-execute if data storage aj.<bp>:state d.queue.low[0] run function aj:<bp>/load/pop/low
-
-# 末尾で queue 残量を判定 → round-robin か remove
-execute if data storage aj.<bp>:state d.queue.immediate[0] run return run function aj:<bp>/load/rotate_active
-execute if data storage aj.<bp>:state d.queue.high[0] run return run function aj:<bp>/load/rotate_active
-execute if data storage aj.<bp>:state d.queue.low[0] run return run function aj:<bp>/load/rotate_active
-function aj:<bp>/load/remove_from_global
+function aj:<bp>/load/pop/<pri>
+execute if data storage aj.<bp>:state d.queue.<pri>[0] run return run function aj:<bp>/load/rotate_active/<pri>
+function aj:<bp>/load/remove_from_priority/<pri>
 ```
 
 ```mcfunction
-# aj:<bp>/load/rotate_active
-data remove storage aj.global:state d.queue_order[0]
-data modify storage aj.global:state d.queue_order append value "<bp_id>"
+# aj:<bp>/load/rotate_active/<pri>
+data remove storage aj.global:state d.queue_order.<pri>[0]
+data modify storage aj.global:state d.queue_order.<pri> append value {id:"<bp_id>"}
 ```
 
 ```mcfunction
-# aj:<bp>/load/remove_from_global
-data remove storage aj.global:state d.queue_order[0]
-data remove storage aj.global:state d.active.<bp_id>
+# aj:<bp>/load/remove_from_priority/<pri>
+data remove storage aj.global:state d.queue_order.<pri>[0]
+data remove storage aj.global:state d.active."<bp_id>".<pri>
+# 全 3 priority の queue_order が空 = ロード完全終了 → has_work クリア (load_tick がアイドルに戻る)
+execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work
 ```
 
-### global load_tick / dispatch_step (global.mcb で生成、 TSB 専用)
+step が「自 bp の該当 priority に必ず work がある」 invariant 下で呼ばれることに注意 :
+global load_tick で `queue_order.<pri>[0] = この bp` が選ばれた = `active.<bp>.<pri> = 1b` =
+`queue.<pri>` に 1 件以上ある、 を意味する。 これにより step は queue 空チェックなしで直接 pop でき、
+ファイルが 3 行で済む。
+
+### global load_tick / dispatch_step (global.mcb で生成、 TSB 専用、 priority-aware)
 
 ```mcfunction
 # animated_java:global/load_tick (minecraft:tick タグ登録)
-execute unless data storage aj.global:state d.queue_order[0] run return 0
-function animated_java:global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+execute unless data storage aj.global:state d.has_work run return 0
+execute if data storage aj.global:state d.queue_order.immediate[0] run return run function animated_java:global/load_dispatch_step/immediate with storage aj.global:state d.queue_order.immediate[0]
+execute if data storage aj.global:state d.queue_order.high[0] run return run function animated_java:global/load_dispatch_step/high with storage aj.global:state d.queue_order.high[0]
+execute if data storage aj.global:state d.queue_order.low[0] run function animated_java:global/load_dispatch_step/low with storage aj.global:state d.queue_order.low[0]
 ```
 
 ```mcfunction
-# animated_java:global/load_dispatch_step
-$function $(id)/load/step
+# animated_java:global/load_dispatch_step/<pri>  (3 ファイル、 priority 別)
+$function $(id)/load/step/<pri>
 ```
 
-注意 : `bpId` は元の resourceLocation 全体 (例 `aj:demo_boss`)、 namespace 込みでマクロ展開する。
-これにより bp namespace が `aj` 以外でも対応可能 (例 `mybp:demo_boss/load/step`)。 `with storage`
-は `queue_order[0]` の compound (`{id:"<bpId>"}`) を root として渡し、 `$(id)` でマクロ取り出し。
+注意 :
+
+- アイドル時は 1 行目の `unless has_work` で即 return → 残り 3 行は実行されない
+- work 時は immediate → high → low の順で先頭 bp を 1 つ選び、 該当 priority の dispatch_step に turn を渡す (= global priority 順序保証)
+- `bpId` は元の resourceLocation 全体 (例 `aj:demo_boss`)、 namespace 込みでマクロ展開する。 これにより bp namespace が `aj` 以外でも対応可能 (例 `mybp:demo_boss/load/step/low`)
+- `with storage` は `queue_order.<pri>[0]` の compound (`{id:"<bpId>"}`) を root として渡し、 `$(id)` でマクロ取り出し
 
 mcb 構文 (`1.20.4-tsb/global.mcb` の `dir global` 内に追記) :
 
 ```mcb
 IF (tsb_optimized_export && has_animations) {
     function load_tick minecraft:tick {
-        execute unless data storage aj.global:state d.queue_order[0] run return 0
-        function *global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+        execute unless data storage aj.global:state d.has_work run return 0
+        execute if data storage aj.global:state d.queue_order.immediate[0] run return run function *global/load_dispatch_step/immediate with storage aj.global:state d.queue_order.immediate[0]
+        execute if data storage aj.global:state d.queue_order.high[0] run return run function *global/load_dispatch_step/high with storage aj.global:state d.queue_order.high[0]
+        execute if data storage aj.global:state d.queue_order.low[0] run function *global/load_dispatch_step/low with storage aj.global:state d.queue_order.low[0]
     }
-    function load_dispatch_step {
-        $function $(id)/load/step
+
+    dir load_dispatch_step {
+        function immediate {
+            $function $(id)/load/step/immediate
+        }
+        function high {
+            $function $(id)/load/step/high
+        }
+        function low {
+            $function $(id)/load/step/low
+        }
     }
 }
 ```
 
 `function on_tick minecraft:tick { ... }` は upstream で既出の mcb 糖衣 (line 24)、 これに倣う。
 
-### cleanup の追加項目
+### cleanup の追加項目 (priority-aware)
 
 `aj:<bp>/cleanup.mcfunction` の末尾に global state 後始末を追加 :
 
 ```mcfunction
-# 既存 4 行 (per-bp storage の d 配下削除) + remove_animation_objectives 呼び出しに追加
-data remove storage aj.global:state d.queue_order[{}]    # NG: list 内文字列値削除は MC vanilla で不可
+# 既存 4 行 (per-bp storage の d 配下削除) に続けて :
+execute if data storage aj.global:state d.queue_order.immediate[{id:"<bp_id>"}] run data remove storage aj.global:state d.queue_order.immediate[{id:"<bp_id>"}]
+execute if data storage aj.global:state d.queue_order.high[{id:"<bp_id>"}] run data remove storage aj.global:state d.queue_order.high[{id:"<bp_id>"}]
+execute if data storage aj.global:state d.queue_order.low[{id:"<bp_id>"}] run data remove storage aj.global:state d.queue_order.low[{id:"<bp_id>"}]
+execute if data storage aj.global:state d.active."<bp_id>" run data remove storage aj.global:state d.active."<bp_id>"
+# 全 priority queue_order 空なら has_work クリア (= 完全 idle に戻す)
+execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work
+function aj:<bp>/remove_animation_objectives  # (animations.length > 0 のときのみ)
 ```
 
-問題 : NBT list の string 値削除は MC vanilla 1.20.4 でできない (compound list なら `[{key:value}]` filter 可能、 string list は不可)。
-
-→ 対応 : queue_order を compound list に変更 :
-
-```
-aj.global:state d.queue_order = [
-  {id: "<bp_id_1>"},
-  {id: "<bp_id_2>"},
-  ...
-]
-```
-
-これに合わせて load_dispatch_step も書き換え :
-
-```mcfunction
-# 旧: $function aj:$(queue_order[0])/load/step
-# 新: $function aj:$(id)/load/step  (with storage で queue_order[0] を root に渡す)
-```
-
-dispatch_step の呼び出し側 :
-
-```mcfunction
-# animated_java:global/load_tick
-execute unless data storage aj.global:state d.queue_order[0] run return 0
-function animated_java:global/load_dispatch_step with storage aj.global:state d.queue_order[0]
-```
-
-cleanup での global 削除 :
-
-```mcfunction
-# aj:<bp>/cleanup の末尾
-execute if data storage aj.global:state d.queue_order[{id:"<bp_id>"}] run data remove storage aj.global:state d.queue_order[{id:"<bp_id>"}]
-execute if data storage aj.global:state d.active.<bp_id> run data remove storage aj.global:state d.active.<bp_id>
-```
+queue_order は compound list `[{id:"<bp_id>"}, ...]` なので、 各 priority について
+`[{id:"<bp_id>"}]` selector で値一致削除可 (= list 内文字列値削除は MC vanilla で不可だが、
+compound list なら `[{key:value}]` filter で削除可能)。 active は compound 直下 path 削除。
 
 ### force_load の発火条件 (Phase C 実装、 仕様だけ確定)
 

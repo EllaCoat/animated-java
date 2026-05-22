@@ -26,19 +26,32 @@ dir global {
 	}
 
 	IF (tsb_optimized_export && has_animations) {
-		# TSB Optimized Export 並列 load 制御 (Phase B-1.5)。 各 blueprint の `aj:<bp>/load/init_queue` が
-		# `aj.global:state d.active.<bpId>` membership ガード経由で `d.queue_order` に compound エントリ
-		# `{id:"<bpId>"}` を append する。 この load_tick が `minecraft:tick` タグで常駐し、 毎 tick で
-		# queue_order[0] の bp の load/step を呼び出す。 各 step は 1 expand 関数を消費 + 末尾で round-robin
-		# または active 削除を行うため、 N bp 同時 active でも全体 budget = 1 expand /tick に収まる。
+		# TSB Optimized Export 並列 load 制御 (Phase B-1.5、 priority-aware global round-robin)。
+		# 各 blueprint の `aj:<bp>/load/init_queue` は per-bp queue を完全上書き + 該当 priority に値があれば
+		# `aj.global:state d.queue_order.<pri>` に compound `{id:"<bpId>"}` を append (重複ガード) +
+		# `d.active.<bpId>.<pri> = 1b` + `d.has_work = 1b` を立てる。
+		# load_tick (minecraft:tick) は immediate → high → low の順で先頭 bp を選び、 該当 priority の
+		# load_dispatch_step に compound 引数で渡し、 $function $(id)/load/step/<pri> で per-bp 関数を呼ぶ。
+		# 各 step は 1 expand 関数を消費 + 残量で rotate (= 同 priority 内 round-robin) or remove_from_priority。
+		# アイドル時は has_work フラグの存在チェック 1 命令で即 return。
 		# 詳細 : docs/tsb-known-issues/parallel-project-load.md。
 		function load_tick minecraft:tick {
-			execute unless data storage aj.global:state d.queue_order[0] run return 0
-			function *global/load_dispatch_step with storage aj.global:state d.queue_order[0]
+			execute unless data storage aj.global:state d.has_work run return 0
+			execute if data storage aj.global:state d.queue_order.immediate[0] run return run function *global/load_dispatch_step/immediate with storage aj.global:state d.queue_order.immediate[0]
+			execute if data storage aj.global:state d.queue_order.high[0] run return run function *global/load_dispatch_step/high with storage aj.global:state d.queue_order.high[0]
+			execute if data storage aj.global:state d.queue_order.low[0] run function *global/load_dispatch_step/low with storage aj.global:state d.queue_order.low[0]
 		}
 
-		function load_dispatch_step {
-			$function $(id)/load/step
+		dir load_dispatch_step {
+			function immediate {
+				$function $(id)/load/step/immediate
+			}
+			function high {
+				$function $(id)/load/step/high
+			}
+			function low {
+				$function $(id)/load/step/low
+			}
 		}
 	}
 

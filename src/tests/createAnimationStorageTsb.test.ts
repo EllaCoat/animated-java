@@ -242,8 +242,11 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'execute if data storage aj.demo_boss:variants d run data remove storage aj.demo_boss:variants d',
 				'execute if data storage aj.demo_boss:state d run data remove storage aj.demo_boss:state d',
 				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d',
-				'execute if data storage aj.global:state d.queue_order[{id:"aj:demo_boss"}] run data remove storage aj.global:state d.queue_order[{id:"aj:demo_boss"}]',
+				'execute if data storage aj.global:state d.queue_order.immediate[{id:"aj:demo_boss"}] run data remove storage aj.global:state d.queue_order.immediate[{id:"aj:demo_boss"}]',
+				'execute if data storage aj.global:state d.queue_order.high[{id:"aj:demo_boss"}] run data remove storage aj.global:state d.queue_order.high[{id:"aj:demo_boss"}]',
+				'execute if data storage aj.global:state d.queue_order.low[{id:"aj:demo_boss"}] run data remove storage aj.global:state d.queue_order.low[{id:"aj:demo_boss"}]',
 				'execute if data storage aj.global:state d.active."aj:demo_boss" run data remove storage aj.global:state d.active."aj:demo_boss"',
+				'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work',
 				'function aj:demo_boss/remove_animation_objectives'
 			),
 			[`${P}/expand/idle/p0.mcfunction`]: mc(
@@ -272,26 +275,51 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'data modify storage aj.demo_boss:state d.queue.immediate set value []',
 				'data modify storage aj.demo_boss:state d.queue.high set value []',
 				'data modify storage aj.demo_boss:state d.queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0","aj:demo_boss/expand_variants/attack"]',
-				'execute unless data storage aj.global:state d.active."aj:demo_boss" run data modify storage aj.global:state d.queue_order append value {id:"aj:demo_boss"}',
-				'data modify storage aj.global:state d.active."aj:demo_boss" set value 1b'
+				'execute unless data storage aj.global:state d.active."aj:demo_boss".low run data modify storage aj.global:state d.queue_order.low append value {id:"aj:demo_boss"}',
+				'data modify storage aj.global:state d.active."aj:demo_boss".low set value 1b',
+				'data modify storage aj.global:state d.has_work set value 1b'
 			),
-			[`${P}/load/step.mcfunction`]: mc(
-				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/pop/immediate',
-				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/pop/high',
-				'execute if data storage aj.demo_boss:state d.queue.low[0] run function aj:demo_boss/load/pop/low',
-				'',
-				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/rotate_active',
-				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/rotate_active',
-				'execute if data storage aj.demo_boss:state d.queue.low[0] run return run function aj:demo_boss/load/rotate_active',
-				'function aj:demo_boss/load/remove_from_global'
+			[`${P}/load/step/immediate.mcfunction`]: mc(
+				'function aj:demo_boss/load/pop/immediate',
+				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/rotate_active/immediate',
+				'function aj:demo_boss/load/remove_from_priority/immediate'
 			),
-			[`${P}/load/rotate_active.mcfunction`]: mc(
-				'data remove storage aj.global:state d.queue_order[0]',
-				'data modify storage aj.global:state d.queue_order append value {id:"aj:demo_boss"}'
+			[`${P}/load/step/high.mcfunction`]: mc(
+				'function aj:demo_boss/load/pop/high',
+				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/rotate_active/high',
+				'function aj:demo_boss/load/remove_from_priority/high'
 			),
-			[`${P}/load/remove_from_global.mcfunction`]: mc(
-				'data remove storage aj.global:state d.queue_order[0]',
-				'data remove storage aj.global:state d.active."aj:demo_boss"'
+			[`${P}/load/step/low.mcfunction`]: mc(
+				'function aj:demo_boss/load/pop/low',
+				'execute if data storage aj.demo_boss:state d.queue.low[0] run return run function aj:demo_boss/load/rotate_active/low',
+				'function aj:demo_boss/load/remove_from_priority/low'
+			),
+			[`${P}/load/rotate_active/immediate.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.immediate[0]',
+				'data modify storage aj.global:state d.queue_order.immediate append value {id:"aj:demo_boss"}'
+			),
+			[`${P}/load/rotate_active/high.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.high[0]',
+				'data modify storage aj.global:state d.queue_order.high append value {id:"aj:demo_boss"}'
+			),
+			[`${P}/load/rotate_active/low.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.low[0]',
+				'data modify storage aj.global:state d.queue_order.low append value {id:"aj:demo_boss"}'
+			),
+			[`${P}/load/remove_from_priority/immediate.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.immediate[0]',
+				'data remove storage aj.global:state d.active."aj:demo_boss".immediate',
+				'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work'
+			),
+			[`${P}/load/remove_from_priority/high.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.high[0]',
+				'data remove storage aj.global:state d.active."aj:demo_boss".high',
+				'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work'
+			),
+			[`${P}/load/remove_from_priority/low.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order.low[0]',
+				'data remove storage aj.global:state d.active."aj:demo_boss".low',
+				'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work'
 			),
 			[`${P}/load/pop/immediate.mcfunction`]: mc(
 				'data modify storage aj.demo_boss:tmp d.pop set from storage aj.demo_boss:state d.queue.immediate[0]',
@@ -369,28 +397,41 @@ describe('createAnimationStorageTsb - batch splitting (cells_per_tick)', () => {
 			result.files.get('data/aj/functions/demo/load/init_queue.mcfunction')!.content
 		).toContain('d.queue.low set value ["aj:demo/expand/run/p0","aj:demo/expand/run/p1"]')
 
-		// init_queue は schedule を廃止し、 global active + queue_order への登録に置き換わっている。
+		// init_queue は schedule を廃止し、 priority 別 global queue_order + has_work への登録に置き換わっている。
 		const initQueue = result.files.get(
 			'data/aj/functions/demo/load/init_queue.mcfunction'
 		)!.content as string
 		expect(initQueue).not.toContain('schedule function')
+		// demo_boss は全 anim が low に積まれる (priority UI 未実装、 Phase B-1.6 で振り分け)。
 		expect(initQueue).toContain(
-			'execute unless data storage aj.global:state d.active."aj:demo" run data modify storage aj.global:state d.queue_order append value {id:"aj:demo"}'
+			'execute unless data storage aj.global:state d.active."aj:demo".low run data modify storage aj.global:state d.queue_order.low append value {id:"aj:demo"}'
 		)
-		expect(initQueue).toContain('data modify storage aj.global:state d.active."aj:demo" set value 1b')
+		expect(initQueue).toContain('data modify storage aj.global:state d.active."aj:demo".low set value 1b')
+		expect(initQueue).toContain('data modify storage aj.global:state d.has_work set value 1b')
+		// immediate / high には何も入らない (該当 priority の queue が空のため、 register 行も生成されない)。
+		expect(initQueue).not.toContain('d.active."aj:demo".immediate')
+		expect(initQueue).not.toContain('d.active."aj:demo".high')
 
-		// 旧 load/tick は出力されない、 代わりに load/step が出る。
+		// 旧 load/tick / 旧 step は出力されない、 priority 別の step/<pri> + rotate_active/<pri> +
+		// remove_from_priority/<pri> が 9 ファイル出力される。
 		expect(result.files.has('data/aj/functions/demo/load/tick.mcfunction')).toBe(false)
-		expect(result.files.has('data/aj/functions/demo/load/step.mcfunction')).toBe(true)
-		expect(result.files.has('data/aj/functions/demo/load/rotate_active.mcfunction')).toBe(true)
-		expect(result.files.has('data/aj/functions/demo/load/remove_from_global.mcfunction')).toBe(
-			true
-		)
+		expect(result.files.has('data/aj/functions/demo/load/step.mcfunction')).toBe(false)
+		expect(result.files.has('data/aj/functions/demo/load/rotate_active.mcfunction')).toBe(false)
+		expect(result.files.has('data/aj/functions/demo/load/remove_from_global.mcfunction')).toBe(false)
+		for (const pri of ['immediate', 'high', 'low'] as const) {
+			expect(result.files.has(`data/aj/functions/demo/load/step/${pri}.mcfunction`)).toBe(true)
+			expect(result.files.has(`data/aj/functions/demo/load/rotate_active/${pri}.mcfunction`)).toBe(
+				true
+			)
+			expect(
+				result.files.has(`data/aj/functions/demo/load/remove_from_priority/${pri}.mcfunction`)
+			).toBe(true)
+		}
 	})
 })
 
-describe('createAnimationStorageTsb - global キュー化 (Phase B-1.5)', () => {
-	it('cleanup は global state の自 bp 痕跡を削除する 2 行を含む', async () => {
+describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B-1.5)', () => {
+	it('cleanup は 3 priority 別の queue_order 削除 + active + has_work クリアを含む', async () => {
 		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
 		const anim = makeAnimation('run', [frame({ a: IDENT })], ['a'])
 		const result = await createAnimationStorageTsb(rig, [anim], {
@@ -400,11 +441,16 @@ describe('createAnimationStorageTsb - global キュー化 (Phase B-1.5)', () => 
 			maxLineBytes: 1_000_000,
 		})
 		const cleanup = result.files.get('data/aj/functions/demo/cleanup.mcfunction')!.content as string
-		expect(cleanup).toContain(
-			'execute if data storage aj.global:state d.queue_order[{id:"aj:demo"}] run data remove storage aj.global:state d.queue_order[{id:"aj:demo"}]'
-		)
+		for (const pri of ['immediate', 'high', 'low'] as const) {
+			expect(cleanup).toContain(
+				`execute if data storage aj.global:state d.queue_order.${pri}[{id:"aj:demo"}] run data remove storage aj.global:state d.queue_order.${pri}[{id:"aj:demo"}]`
+			)
+		}
 		expect(cleanup).toContain(
 			'execute if data storage aj.global:state d.active."aj:demo" run data remove storage aj.global:state d.active."aj:demo"'
+		)
+		expect(cleanup).toContain(
+			'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work'
 		)
 	})
 
@@ -418,13 +464,14 @@ describe('createAnimationStorageTsb - global キュー化 (Phase B-1.5)', () => 
 		})
 		const cleanup = result.files.get('data/aj/functions/empty/cleanup.mcfunction')!.content as string
 		expect(cleanup).toContain(
-			'execute if data storage aj.global:state d.queue_order[{id:"aj:empty"}] run data remove storage aj.global:state d.queue_order[{id:"aj:empty"}]'
+			'execute if data storage aj.global:state d.queue_order.low[{id:"aj:empty"}] run data remove storage aj.global:state d.queue_order.low[{id:"aj:empty"}]'
 		)
+		expect(cleanup).toContain('data remove storage aj.global:state d.has_work')
 		// animations が空のときは remove_animation_objectives も呼ばない (既存仕様)。
 		expect(cleanup).not.toContain('remove_animation_objectives')
 	})
 
-	it('animations 空のときは init_queue が global active への登録もしない (空 queue でも tick タグが回るのを抑制)', async () => {
+	it('animations 空のときは init_queue が global active / queue_order / has_work への登録もしない', async () => {
 		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
 		const result = await createAnimationStorageTsb(rig, [], {
 			blueprintId: 'aj:empty',
@@ -459,6 +506,49 @@ describe('createAnimationStorageTsb - global キュー化 (Phase B-1.5)', () => 
 		expect(iq1).not.toContain('boss_b')
 		expect(iq2).toContain('{id:"aj:boss_b"}')
 		expect(iq2).not.toContain('boss_a')
+	})
+
+	it('step/<pri> は 3 行 (pop / 残量チェック rotate / fall-through remove)', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('run', [frame({ a: IDENT })], ['a'])
+		const result = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:demo',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		for (const pri of ['immediate', 'high', 'low'] as const) {
+			const step = result.files.get(`data/aj/functions/demo/load/step/${pri}.mcfunction`)!
+				.content as string
+			expect(step).toBe(
+				`function aj:demo/load/pop/${pri}\n` +
+					`execute if data storage aj.demo:state d.queue.${pri}[0] run return run function aj:demo/load/rotate_active/${pri}\n` +
+					`function aj:demo/load/remove_from_priority/${pri}\n`
+			)
+		}
+	})
+
+	it('remove_from_priority/<pri> は全 3 priority 空チェック付きで has_work をクリアする', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('run', [frame({ a: IDENT })], ['a'])
+		const result = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:demo',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		for (const pri of ['immediate', 'high', 'low'] as const) {
+			const removePri = result.files.get(
+				`data/aj/functions/demo/load/remove_from_priority/${pri}.mcfunction`
+			)!.content as string
+			expect(removePri).toContain(`data remove storage aj.global:state d.queue_order.${pri}[0]`)
+			expect(removePri).toContain(
+				`data remove storage aj.global:state d.active."aj:demo".${pri}`
+			)
+			expect(removePri).toContain(
+				'execute unless data storage aj.global:state d.queue_order.immediate[0] unless data storage aj.global:state d.queue_order.high[0] unless data storage aj.global:state d.queue_order.low[0] run data remove storage aj.global:state d.has_work'
+			)
+		}
 	})
 })
 
