@@ -45,6 +45,7 @@ export interface BlueprintSettings {
 	tsb_quantization_digits_default: number
 	tsb_cells_per_tick: number
 	tsb_max_line_bytes: number
+	tsb_silent_uninstall: boolean
 	// Plugin Settings
 	baked_animations: boolean
 	json_file: string
@@ -91,6 +92,7 @@ export const defaultValues: BlueprintSettings = {
 	tsb_quantization_digits_default: 5,
 	tsb_cells_per_tick: 1000,
 	tsb_max_line_bytes: 1_000_000,
+	tsb_silent_uninstall: true,
 
 	// Plugin Settings
 	baked_animations: true,
