@@ -35,15 +35,73 @@ import type { IRenderedRig } from '../systems/rigRenderer'
 type Vec3 = [number, number, number]
 type Quat = [number, number, number, number]
 
-/** A bone transform; only the `decomposed` channels are read by the generator. */
+/**
+ * A bone transform fixture. The generator now SVD-decomposes `matrix.elements` per cell to
+ * pick between 7 / 10 / 14 floats, so we synthesise a column-major 4×4 matrix from the
+ * provided TRS (with right_rotation = identity, which keeps the round-trip exact).
+ */
 function boneT(t: Vec3, r: Quat, s: Vec3): INodeTransform {
+	// 概数で書かれた quaternion を正規化 (production 経路では Blockbench が常に unit quaternion を保証するが、
+	// テスト fixture では手書き値の norm 微小ズレが SVD の sigma に乗って scale_class 判定を狂わせるため)。
+	const rNorm = normalizeQuat(r)
+	const elements = composeMatrix16(t, rNorm, s, [0, 0, 0, 1])
 	return {
+		matrix: { elements } as unknown as THREE.Matrix4,
 		decomposed: {
 			translation: { x: t[0], y: t[1], z: t[2] },
-			left_rotation: { x: r[0], y: r[1], z: r[2], w: r[3] },
+			left_rotation: { x: rNorm[0], y: rNorm[1], z: rNorm[2], w: rNorm[3] },
 			scale: { x: s[0], y: s[1], z: s[2] },
 		},
 	} as unknown as INodeTransform
+}
+
+function normalizeQuat(q: Quat): Quat {
+	const n = Math.hypot(q[0], q[1], q[2], q[3])
+	if (n === 0) return [0, 0, 0, 1]
+	return [q[0] / n, q[1] / n, q[2] / n, q[3] / n]
+}
+
+/** Build a column-major 4×4 matrix from `T · R_left · S · R_right` (right_rotation defaults to identity). */
+function composeMatrix16(
+	t: readonly [number, number, number],
+	rl: readonly [number, number, number, number],
+	s: readonly [number, number, number],
+	rr: readonly [number, number, number, number]
+): number[] {
+	const Rl = matFromQuat(rl)
+	const Rr = matFromQuat(rr)
+	const S: number[][] = [
+		[s[0], 0, 0],
+		[0, s[1], 0],
+		[0, 0, s[2]],
+	]
+	const RlS = matMul3(Rl, S)
+	const M = matMul3(RlS, Rr)
+	return [
+		M[0][0], M[1][0], M[2][0], 0,
+		M[0][1], M[1][1], M[2][1], 0,
+		M[0][2], M[1][2], M[2][2], 0,
+		t[0], t[1], t[2], 1,
+	]
+}
+
+function matFromQuat(q: readonly [number, number, number, number]): number[][] {
+	const [x, y, z, w] = q
+	const xx = x * x, yy = y * y, zz = z * z
+	const xy = x * y, xz = x * z, yz = y * z
+	const wx = w * x, wy = w * y, wz = w * z
+	return [
+		[1 - 2 * (yy + zz), 2 * (xy - wz), 2 * (xz + wy)],
+		[2 * (xy + wz), 1 - 2 * (xx + zz), 2 * (yz - wx)],
+		[2 * (xz - wy), 2 * (yz + wx), 1 - 2 * (xx + yy)],
+	]
+}
+
+function matMul3(A: readonly number[][], B: readonly number[][]): number[][] {
+	const R: number[][] = [[0, 0, 0], [0, 0, 0], [0, 0, 0]]
+	for (let i = 0; i < 3; i++)
+		for (let j = 0; j < 3; j++) R[i][j] = A[i][0] * B[0][j] + A[i][1] * B[1][j] + A[i][2] * B[2][j]
+	return R
 }
 
 /** A locator transform; the generator reads pos[0..2] and rot[0..1]. */
@@ -186,16 +244,16 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d'
 			),
 			[`${P}/expand/idle/p0.mcfunction`]: mc(
-				'$data modify storage aj.demo_boss:anim d.idle.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,.1f,0f,0f,.087f,0f,.996f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim d.idle.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim d.idle.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,.052f,0f,.999f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f],"1":[0f,.1f,0f,0f,.08702f,0f,.99621f],"2":[0f,0f,0f,0f,0f,0f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f],"1":[0f,0f,0f,0f,0f,0f,1f],"2":[0f,0f,0f,0f,0f,0f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.idle.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f],"1":[.5f,0f,0f,0f,.05198f,0f,.99865f],"2":[.5f,0f,0f,0f,0f,0f,1f]}',
 				'$data modify storage aj.demo_boss:anim d.idle.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,5f,10f],"2":[0f,1.5f,0f,0f,0f]}',
 				'$data modify storage aj.demo_boss:state d.loaded.idle$(_) set value 1b'
 			),
 			[`${P}/expand/attack/p0.mcfunction`]: mc(
-				'$data modify storage aj.demo_boss:anim d.attack.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,.174f,0f,.985f,1f,1f,1f],"2":[0f,.3f,0f,.087f,.342f,.025f,.935f,1f,1f,1f],"3":[0f,.2f,0f,0f,.342f,0f,.94f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim d.attack.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"2":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"3":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"4":[0f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
-				'$data modify storage aj.demo_boss:anim d.attack.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f],"1":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"2":[.5f,0f,0f,0f,0f,.5f,.866f,1f,1f,1f],"3":[.5f,0f,0f,0f,0f,.259f,.966f,1f,1f,1f],"4":[.5f,0f,0f,0f,0f,0f,1f,1f,1f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f],"1":[0f,0f,0f,0f,.17396f,0f,.98475f],"2":[0f,.3f,0f,.08703f,.34211f,.02501f,.93529f],"3":[0f,.2f,0f,0f,.3419f,0f,.93974f],"4":[0f,0f,0f,0f,0f,0f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.bones.1$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f],"1":[0f,0f,0f,0f,0f,0f,1f],"2":[0f,0f,0f,0f,0f,0f,1f],"3":[0f,0f,0f,0f,0f,0f,1f],"4":[0f,0f,0f,0f,0f,0f,1f]}',
+				'$data modify storage aj.demo_boss:anim d.attack.bones.2$(_) set value {"0":[.5f,0f,0f,0f,0f,0f,1f],"1":[.5f,0f,0f,0f,0f,.25897f,.96589f],"2":[.5f,0f,0f,0f,0f,.50001f,.86602f],"3":[.5f,0f,0f,0f,0f,.25897f,.96589f],"4":[.5f,0f,0f,0f,0f,0f,1f]}',
 				'$data modify storage aj.demo_boss:anim d.attack.locators.0$(_) set value {"0":[0f,1.5f,0f,0f,0f],"1":[0f,1.5f,0f,10f,0f],"2":[.05f,1.5f,.3f,30f,0f],"3":[0f,1.5f,0f,15f,0f],"4":[0f,1.5f,0f,0f,0f]}',
 				'$data modify storage aj.demo_boss:state d.loaded.attack$(_) set value 1b'
 			),
@@ -317,11 +375,14 @@ describe('createAnimationStorageTsb - MAX_LINE_BYTES sanity check', () => {
 })
 
 describe('createAnimationStorageTsb - float quantization', () => {
-	it('trims leading/trailing zeros and keeps the sign on negatives', async () => {
+	it('trims leading/trailing zeros and keeps the sign on negatives (identity scale → 7 floats)', async () => {
 		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		// identity scale を維持しつつ、 translation と rotation でマイナス値 / 5 桁小数 / 整数値ゼロを混ぜる。
+		// rotation (0, -0.5, 0, sqrt(3)/2) は単位 quaternion (Y 軸 -60°)。
+		const cos30 = Math.sqrt(3) / 2 // ≒ 0.86603 (5 桁丸めで .86603f)
 		const anim = makeAnimation(
 			'q',
-			[frame({ a: boneT([-0.5, 0.00001, 1], [0, 0, 0, 1], [1.5, 0, -1.25]) })],
+			[frame({ a: boneT([-0.5, 0.00001, 1], [0, -0.5, 0, cos30], [1, 1, 1]) })],
 			['a']
 		)
 
@@ -333,6 +394,44 @@ describe('createAnimationStorageTsb - float quantization', () => {
 		})
 
 		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content
-		expect(content).toContain('"0":[-.5f,.00001f,1f,0f,0f,0f,1f,1.5f,0f,-1.25f]')
+		// translation: -.5f / .00001f / 1f, rotation: 0f / -.5f / 0f / .86603f, scale 省略 (identity → 7 floats)
+		expect(content).toContain('"0":[-.5f,.00001f,1f,0f,-.5f,0f,.86603f]')
+	})
+
+	it('outputs 10 floats for uniform non-identity scale', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('q', [frame({ a: boneT([0, 0, 0], [0, 0, 0, 1], [2, 2, 2]) })], ['a'])
+
+		const result = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:demo',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+
+		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content
+		expect(content).toContain('"0":[0f,0f,0f,0f,0f,0f,1f,2f,2f,2f]')
+	})
+
+	it('outputs 14 floats for non-uniform scale (no shear)', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('q', [frame({ a: boneT([0, 0, 0], [0, 0, 0, 1], [2, 3, 4]) })], ['a'])
+
+		const result = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:demo',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+
+		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content
+		// 14 floats: translation + left_rotation + scale + right_rotation
+		// scale が pure diagonal (no shear) なら R_left = R_right = identity に取れるはず
+		// SVD は降順で sigma を並べるため scale は (4, 3, 2) の順で出る (R_left / R_right はそれを補う回転)
+		// 配列長だけ確認 (具体値は SVD 自由度のため固定しない)
+		const match = content.match(/"0":\[([^\]]+)\]/)
+		expect(match).not.toBeNull()
+		const floatCount = match![1].split(',').length
+		expect(floatCount).toBe(14)
 	})
 })

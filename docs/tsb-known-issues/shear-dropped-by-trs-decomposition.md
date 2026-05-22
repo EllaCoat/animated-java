@@ -1,10 +1,22 @@
 # TSB Known Issue: TRS 分解（10 floats）がせん断を静かに欠落させる
 
-- **ステータス**: 対応方針決定済み（せん断検出 sanity check を追加。実装は別タスク）
+- **ステータス**: 解決済 (2026-05-22、 Phase B-1-shear で 7/10/14 floats 自動判定 + SVD 分解を導入)
 - **発見日**: 2026-05-21（Phase B-1 生成検証 / コードレビュー）
 - **重大度**: 中〜高（該当リグでは描画リグレッション。ただし非一様スケール未使用なら無害）
 - **発生箇所**: `src/systems/datapackCompiler/createAnimationStorageTsb.ts`
-  （`buildBoneFramesObj` が `transform.decomposed` を使用）
+  （`buildBoneFramesObj` が `transform.decomposed` を使用 → SVD 経由に変更済）
+
+## 解決経緯 (2026-05-22)
+
+- `src/systems/datapackCompiler/decomposeTsb.ts` を新設。 3×3 Jacobi rotation で SVD 自作実装。 `M = U · Σ · Vᵀ` を分解、 scale_class を `identity` / `uniform` / `non-uniform` に判定 (ε = 10^(-digits))
+- `buildBoneFramesObj` が `transform.matrix.elements` を `decomposeTsb` に渡し、 scale_class に応じて 7 / 10 / 14 floats を cell 単位で自動振り分け
+  - identity : translation + left_rotation = 7 floats
+  - uniform : + scale = 10 floats
+  - non-uniform : + right_rotation = 14 floats (shear 完全保持)
+- identity / uniform のときは SVD の自由度を吸収するため `U · Vᵀ` を combined left_rotation として取り直し、 right_rotation を identity に強制
+- ヘッドレステスト 16 ケース全通過 (decomposeTsb.test.ts 10 + createAnimationStorageTsb.test.ts 6、 shear matrix / 親非一様 scale × 子回転の合成 / round-trip 一致を確認)
+
+---
 
 ## 背景: AJ 本体は何を出力しているか
 

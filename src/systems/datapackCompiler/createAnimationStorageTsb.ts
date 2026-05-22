@@ -3,6 +3,7 @@ import { parseResourceLocation } from '../../util/minecraftUtil'
 import type { IRenderedAnimation } from '../animationRenderer'
 import type { IRenderedRig } from '../rigRenderer'
 import type { ExportedFile } from '../util'
+import { decomposeTsb, type DecomposedTsb } from './decomposeTsb'
 
 const BONE_TYPES = ['bone', 'text_display', 'item_display', 'block_display']
 
@@ -237,25 +238,51 @@ function buildBoneFramesObj(
 	for (let i = 0; i < anim.frames.length; i++) {
 		const transform = anim.frames[i].node_transforms[bone.uuid]
 		if (!transform) continue
-		const t = transform.decomposed.translation
-		const r = transform.decomposed.left_rotation
-		const s = transform.decomposed.scale
-		const values = [
-			formatTsbFloat(t.x, digits),
-			formatTsbFloat(t.y, digits),
-			formatTsbFloat(t.z, digits),
-			formatTsbFloat(r.x, digits),
-			formatTsbFloat(r.y, digits),
-			formatTsbFloat(r.z, digits),
-			formatTsbFloat(r.w, digits),
-			formatTsbFloat(s.x, digits),
-			formatTsbFloat(s.y, digits),
-			formatTsbFloat(s.z, digits),
-		]
+		// SVD 分解で 7 / 10 / 14 floats を cell 単位で自動振り分け (A-6 参照、 Phase B-1-shear)。
+		// transform.matrix は THREE.Matrix4、 .elements が column-major 16 要素。
+		const matrix = transform.matrix
+		if (!matrix) continue
+		const decomposed = decomposeTsb(matrix.elements as unknown as readonly number[], {
+			quantizationDigits: digits,
+		})
+		const values = formatBoneCell(decomposed, digits)
 		parts.push(`"${i}":[${values.join(',')}]`)
 	}
 	if (parts.length === 0) return null
 	return `{${parts.join(',')}}`
+}
+
+/**
+ * `decomposed` を scale_class に応じて 7 / 10 / 14 floats の文字列配列に整形する。
+ *
+ * - identity : translation 3 + left_rotation 4 = 7 floats (scale 全軸 ≒ 1 のため省略 + right_rotation = I)
+ * - uniform  : 上記 + scale 3 = 10 floats (uniform scale のため right_rotation = I で省略可)
+ * - non-uniform : 上記 + right_rotation 4 = 14 floats (shear ありうるので SVD で算出した R₂ を載せる)
+ */
+function formatBoneCell(d: DecomposedTsb, digits: number): string[] {
+	const [tx, ty, tz] = d.translation
+	const [qx, qy, qz, qw] = d.left_rotation
+	const values: string[] = [
+		formatTsbFloat(tx, digits),
+		formatTsbFloat(ty, digits),
+		formatTsbFloat(tz, digits),
+		formatTsbFloat(qx, digits),
+		formatTsbFloat(qy, digits),
+		formatTsbFloat(qz, digits),
+		formatTsbFloat(qw, digits),
+	]
+	if (d.scale_class === 'identity') return values
+	const [sx, sy, sz] = d.scale
+	values.push(formatTsbFloat(sx, digits), formatTsbFloat(sy, digits), formatTsbFloat(sz, digits))
+	if (d.scale_class === 'uniform') return values
+	const [rx, ry, rz, rw] = d.right_rotation
+	values.push(
+		formatTsbFloat(rx, digits),
+		formatTsbFloat(ry, digits),
+		formatTsbFloat(rz, digits),
+		formatTsbFloat(rw, digits)
+	)
+	return values
 }
 
 function buildLocatorFramesObj(
