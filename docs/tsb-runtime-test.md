@@ -95,8 +95,8 @@ tree .  # tree が無ければ find . -type f
 - [ ] `_bone_id_mapping.mcfunction`
 - [ ] `cleanup.mcfunction`
 - [ ] `expand/<anim>/p<N>.mcfunction` (アキシャ 21 アニメ × 各 1〜数バッチ)
-- [ ] `expand_variants/<anim>.mcfunction` (variant 持ち anim のみ)
-- [ ] `force_load/<anim>.mcfunction` (全 anim)
+- [ ] `expand_variants.mcfunction` (**project 単位 1 ファイル**、 variant 持ち anim が 1 つでもあれば生成。 旧 `expand_variants/<anim>.mcfunction` ディレクトリ構成は廃止)
+- [ ] `force_load/<anim>.mcfunction` (全 anim、 **冒頭に variant guard 行が含まれる**)
 - [ ] `load/init_queue.mcfunction`
 - [ ] `load/dispatch.mcfunction`
 - [ ] `load/step/{immediate,high,low}.mcfunction` (3 ファイル)
@@ -133,11 +133,34 @@ cat load/init_queue.mcfunction
 ```
 
 期待 :
-- 3 priority 別の `data modify storage aj.axia:state d.queue.<pri> set value [...]` (`immediate` / `high` は空、 `low` に全アニメ + 全 variant)
+- 3 priority 別の `data modify storage aj.axia:state d.queue.<pri> set value [...]` :
+  - `queue.immediate` に **variant ref 1 個** : `["aj:axia/expand_variants"]` (variant が 1 つでもあれば、 自動で immediate 固定)
+  - `queue.high` は空
+  - `queue.low` に **全 anim の bone expand 参照リスト** (Phase B-1 暫定で全アニメ low 固定、 Phase B-1.6 UI 拡張で振り分け可能になる予定)
+- `execute unless data storage aj.global:state d.active."aj:axia".immediate ... append value {id:"aj:axia"}`
+- `data modify storage aj.global:state d.active."aj:axia".immediate set value 1b`
 - `execute unless data storage aj.global:state d.active."aj:axia".low ... append value {id:"aj:axia"}`
 - `data modify storage aj.global:state d.active."aj:axia".low set value 1b`
 - `data modify storage aj.global:state d.has_work set value 1b`
 - `schedule function` 行 **無し**
+
+```bash
+# variant 集約後の expand_variants.mcfunction
+cat expand_variants.mcfunction
+```
+
+期待 (variant 持ち anim が N 個ある場合) :
+- N 行 + 1 行 = `$data modify storage aj.axia:variants d.<anim>$(_) set value {...}` を N 行 (anim 単位の compound は維持) + 末尾に `$data modify storage aj.axia:state d.loaded_variants$(_) set value 1b` (**project 単位 boolean** に縮約済み)
+- 旧形式 (`d.loaded_variants.<anim>$(_) set value 1b`) **無し**
+
+```bash
+# force_load 同期経路 (variant guard が冒頭にあること)
+cat force_load/<anim>.mcfunction
+```
+
+期待 :
+- 1 行目 : `execute unless data storage aj.axia:state d.loaded_variants run function aj:axia/expand_variants {_: ""}` (variant 未ロード時のみ project 全 variant 同期展開)
+- 2 行目以降 : `function aj:axia/expand/<anim>/p<N> {_: ""}` を該当 anim のバッチ数分
 
 ```bash
 cat load/step/low.mcfunction
@@ -176,23 +199,27 @@ reload 直後 (1 tick 以内、 まだ load_tick が走る前) :
 /data get storage aj.global:state d
 ```
 
-期待される storage (例) :
+期待される storage (例、 variant 持ち anim が 1 つ以上ある場合) :
 ```
-{has_work: 1b, active: {"aj:axia": {low: 1b}}, queue_order: {low: [{id: "aj:axia"}]}}
+{has_work: 1b, active: {"aj:axia": {immediate: 1b, low: 1b}}, queue_order: {immediate: [{id: "aj:axia"}], low: [{id: "aj:axia"}]}}
 ```
 
 - [ ] `has_work: 1b` が立っている
-- [ ] `active."aj:axia".low: 1b` (immediate / high は無い、 全アニメが low に積まれるため)
-- [ ] `queue_order.low = [{id: "aj:axia"}]` (1 エントリ)
-- [ ] `queue_order.immediate` / `queue_order.high` が **存在しない**
+- [ ] `active."aj:axia".immediate: 1b` + `active."aj:axia".low: 1b` (high は無い)
+- [ ] `queue_order.immediate = [{id: "aj:axia"}]` (variant 用)
+- [ ] `queue_order.low = [{id: "aj:axia"}]` (bone expand 用)
+- [ ] `queue_order.high` が **存在しない**
+
+variant を持つ anim が無い blueprint なら `queue_order.immediate` も無し。
 
 ```mcfunction
 /data get storage aj.axia:state d.queue
 ```
 
 期待 :
-- [ ] `queue.immediate = []`、 `queue.high = []`
-- [ ] `queue.low` に全 anim + 全 variant の expand 参照リスト
+- [ ] `queue.immediate = ["aj:axia/expand_variants"]` (variant ref 1 個固定、 variant が無い blueprint なら `[]`)
+- [ ] `queue.high = []`
+- [ ] `queue.low` に **全 anim の bone expand 参照リスト**
 
 ### 4-3. 段階展開ペース観察
 
@@ -215,8 +242,10 @@ data get storage aj.axia:state d.queue.low
 ```
 
 確認項目 :
-- [ ] `queue.low` のリスト長が 5 tick で約 5 件減っている (1 expand /tick で消化)
-- [ ] `has_work` が 1b のまま (まだ work 残っている)
+- [ ] **1 tick 目** : `queue.immediate` が **空になっている** (variant ref 1 個が即 flush されて pop 済み)、 `d.loaded_variants = 1b` が立っている
+- [ ] `queue_order.immediate` が **削除されている** (variant ロード完了で remove_from_priority 経路で pop)
+- [ ] `queue.low` のリスト長が 5 tick で約 5 件減っている (1 expand /tick で消化、 immediate 消費後は low に集中)
+- [ ] `has_work` が 1b のまま (まだ low に work 残っている)
 - [ ] `queue_order.low` は `[{id: "aj:axia"}]` のまま (1 bp しか居ないので round-robin しても変わらない)
 
 ### 4-4. 段階展開完了の検出
@@ -279,6 +308,8 @@ expand 関数 1 個あたり 1 tick 消費。 アキシャ全 anim の expand �
 
 確認 :
 - [ ] tellraw `Successfully uninstalled axia!` が **出る**
+- [ ] tellraw の **構文エラーが server log に出ない** (`Couldn't parse text component` などが出ないこと)
+- [ ] tellraw 行が JSON 形式 (`"color":"red"` / `"color":"green"` 形式、 SNBT (`"color":red`) ではない) で出力されていることを `cat data/animated_java/functions/axia/remove_animation_objectives.mcfunction` で確認 (tellraw-snbt-on-1.20.4 修正の検証ポイント)
 
 ### 5-3. cleanup 後の reload で正常復帰
 
@@ -459,7 +490,7 @@ Blockbench で axia から 1 アニメを削除 → re-export → server の dat
 # 個別 bp の loaded フラグ
 /data get storage aj.axia:state d.loaded
 
-# variant 完了フラグ
+# variant 完了フラグ (project 単位 boolean、 1b なら全 variant ロード済み)
 /data get storage aj.axia:state d.loaded_variants
 
 # tick.json タグ登録確認 (server コンソール)
@@ -524,7 +555,9 @@ cat data/animated_java/functions/axia/on_load.mcfunction | wc -l
 - [ ] ロード完了後の常駐コストが MSPT < 1ms (= has_work アイドルガードが効いている)
 - [ ] 2 bp 同時 load でも全体 budget が 1 expand /tick に収まる (= MSPT が単 bp と同等)
 - [ ] cleanup → reload サイクルで残骸 / 不整合が発生しない
-- [ ] サーバログにエラー (`Unknown function` / `Couldn't load functions` 等) が出ない
+- [ ] サーバログにエラー (`Unknown function` / `Couldn't load functions` / `Couldn't parse text component` 等) が出ない
+- [ ] **tellraw 関連** : 1.20.4 で `"color":"red"` などの JSON 形式で出力されている (SNBT (`"color":red`) になっていない、 `tellraw-snbt-on-1.20.4` 修正の検証)
+- [ ] **variant 関連** : `expand_variants.mcfunction` が project 単位 1 ファイル、 `force_load/<anim>.mcfunction` 冒頭に variant guard 行、 `init_queue` の `queue.immediate` に variant ref 1 個固定、 `d.loaded_variants` が project 単位 boolean
 
 ## 12. 検証結果のフィードバック (次セッション引き継ぎ用)
 
@@ -588,6 +621,10 @@ FAIL 報告を受けたとき、 次セッションのラヴィが最初に当�
 | priority 順序が崩れる (テスト 5) | `1.20.4-tsb/global.mcb` の load_tick の 3 priority 判定順 (immediate → high → low の return run チェーン) | 同上 |
 | 削除アニメ参照エラー (テスト 6) | `buildInitQueue` の queue 上書き (= set value、 削除アニメ参照が新値に置き換わる前提)、 もしくは旧 queue が `data modify append` で残るバグ | 同上の「リロード時の挙動」 |
 | TPS 崩れ (テスト 4 / 全体) | `cells_per_tick` Blueprint Setting の調整 + プロファイル取得 (`/debug start`) | `~/docs-workspace/next-tasks/animated-java-optimization.md` の A-5 セクション |
+| tellraw `"color":red` で SNBT 構文エラー (テスト 3 / 全体) | `src/systems/datapackCompiler/tellraw.ts` の `renderTextComponent` ヘルパー経由化 | `tsb-known-issues/tellraw-snbt-on-1.20.4.md` |
+| variant 集約不整合 (`expand_variants/<anim>.mcfunction` が残る or `loaded_variants.<anim>` が立つ) (テスト 1) | `createAnimationStorageTsb.ts:buildProjectVariantsExpand` + メインループの variant 単一 ref 処理 | 本ファイル § 3-3 / § 4-2 |
+| force_load で variant 同期されない (テスト 2 / 6) | `createAnimationStorageTsb.ts:buildForceLoad` の variant guard 行追加 | 同上 |
+| variant が immediate priority に入らない (テスト 1 / 2) | `createAnimationStorageTsb.ts:buildInitQueue` の `buckets.immediate.push(variantsExpandRef)` 部分 | 同上 |
 
 ### 12-3. FAIL 分類別の対応方針
 
