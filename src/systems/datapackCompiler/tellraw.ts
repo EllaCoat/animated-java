@@ -4,6 +4,14 @@ import { type IRenderedAnimation } from '../animationRenderer'
 import { type IRenderedVariant } from '../rigRenderer'
 import OBJECTIVES from './objectives'
 
+// mc-build の `<%...%>` 式評価結果を文字列化する際、 TextComponent インスタンスが
+// 引数無し `toString()` 経由で SNBT 化されてしまう (defaultMinecraftVersion = 1.21.11 が効く)。
+// 1.20.4 では text component は JSON 必須 (`"color": "red"`)、 SNBT (`"color": red`) は構文エラー。
+// → TELLRAW.* を文字列で返すよう変更し、 ターゲットバージョンを直接渡して toString する。
+// 詳細: docs/tsb-known-issues/tellraw-snbt-on-1.20.4.md
+const renderTextComponent = (tc: TextComponent): string =>
+	tc.toString(true, Project!.animated_java.target_minecraft_version)
+
 const TELLRAW_PREFIX = () =>
 	new TextComponent([
 		{ text: '\n ', color: 'gray' },
@@ -18,27 +26,31 @@ const TELLRAW_PREFIX = () =>
 
 const TELLRAW_SUFFIX = () => '\n'
 
-const TELLRAW_ERROR = (errorName: string, details: TextElement) =>
-	new TextComponent([
-		{ text: '', color: 'red' },
-		TELLRAW_PREFIX(),
-		toSmallCaps('error') + ': ',
-		{ text: errorName, underlined: true },
-		'\n\n ',
-		...(Array.isArray(details) ? details : [details]),
-		TELLRAW_SUFFIX(),
-	])
+const TELLRAW_ERROR = (errorName: string, details: TextElement): string =>
+	renderTextComponent(
+		new TextComponent([
+			{ text: '', color: 'red' },
+			TELLRAW_PREFIX(),
+			toSmallCaps('error') + ': ',
+			{ text: errorName, underlined: true },
+			'\n\n ',
+			...(Array.isArray(details) ? details : [details]),
+			TELLRAW_SUFFIX(),
+		])
+	)
 
-const TELLRAW_WARNING = (warningName: string, details: TextElement) =>
-	new TextComponent([
-		{ text: '', color: 'yellow' },
-		TELLRAW_PREFIX(),
-		toSmallCaps('warning') + ': ',
-		{ text: warningName, underlined: true },
-		'\n\n ',
-		...(Array.isArray(details) ? details : [details]),
-		TELLRAW_SUFFIX(),
-	])
+const TELLRAW_WARNING = (warningName: string, details: TextElement): string =>
+	renderTextComponent(
+		new TextComponent([
+			{ text: '', color: 'yellow' },
+			TELLRAW_PREFIX(),
+			toSmallCaps('warning') + ': ',
+			{ text: warningName, underlined: true },
+			'\n\n ',
+			...(Array.isArray(details) ? details : [details]),
+			TELLRAW_SUFFIX(),
+		])
+	)
 
 const CREATE_TELLRAW_HELP_LINK = (url: string) =>
 	new TextComponent([
@@ -112,12 +124,13 @@ namespace TELLRAW {
 		])
 
 	export const RIG_OUTDATED_TEXT_DISPLAY = () =>
-		new TextComponent([
-			{ text: '⚠ This rig instance is outdated! ⚠', color: 'red' },
-			'\n It should be removed and re-summoned to ensure it functions correctly.',
-		])
+		renderTextComponent(
+			new TextComponent([
+				{ text: '⚠ This rig instance is outdated! ⚠', color: 'red' },
+				'\n It should be removed and re-summoned to ensure it functions correctly.',
+			])
+		)
 			// Because this is used as NBT in a summon command, we need to double-escape the newlines.
-			.toString()
 			.replaceAll('\\n', '\\\\n')
 
 	export const FUNCTION_NOT_EXECUTED_AS_ROOT_ERROR = (functionPath: string, tag: string) => {
@@ -267,20 +280,22 @@ namespace TELLRAW {
 		])
 
 	export const UNINSTALL = () =>
-		new TextComponent([
-			TELLRAW_PREFIX(),
-			[
-				{ text: 'Successfully uninstalled ', color: 'green' },
-				{ text: Project!.animated_java.blueprint_id, color: 'yellow' },
-				{ text: '!' },
-				{
-					text: '\n If you have exported multiple times, you may have to remove objectives from previous exports manually, as Animated Java only knows about the objectives from the most recent export.',
-					color: 'gray',
-					italic: true,
-				},
-			],
-			TELLRAW_SUFFIX(),
-		])
+		renderTextComponent(
+			new TextComponent([
+				TELLRAW_PREFIX(),
+				[
+					{ text: 'Successfully uninstalled ', color: 'green' },
+					{ text: Project!.animated_java.blueprint_id, color: 'yellow' },
+					{ text: '!' },
+					{
+						text: '\n If you have exported multiple times, you may have to remove objectives from previous exports manually, as Animated Java only knows about the objectives from the most recent export.',
+						color: 'gray',
+						italic: true,
+					},
+				],
+				TELLRAW_SUFFIX(),
+			])
+		)
 
 	export const ARGUMENT_CANNOT_BE_EMPTY = (name: string) =>
 		TELLRAW_ERROR('Argument Cannot Be Empty', [
