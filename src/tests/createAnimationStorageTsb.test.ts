@@ -241,7 +241,9 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'execute if data storage aj.demo_boss:anim d run data remove storage aj.demo_boss:anim d',
 				'execute if data storage aj.demo_boss:variants d run data remove storage aj.demo_boss:variants d',
 				'execute if data storage aj.demo_boss:state d run data remove storage aj.demo_boss:state d',
-				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d'
+				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d',
+				'scoreboard objectives remove aj.idle.frame',
+				'scoreboard objectives remove aj.attack.frame'
 			),
 			[`${P}/expand/idle/p0.mcfunction`]: mc(
 				'$data modify storage aj.demo_boss:anim d.idle.bones.0$(_) set value {"0":[0f,0f,0f,0f,0f,0f,1f],"1":[0f,.1f,0f,0f,.08702f,0f,.99621f],"2":[0f,0f,0f,0f,0f,0f,1f]}',
