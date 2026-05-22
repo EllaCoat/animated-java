@@ -526,12 +526,74 @@ cat data/animated_java/functions/axia/on_load.mcfunction | wc -l
 - [ ] cleanup → reload サイクルで残骸 / 不整合が発生しない
 - [ ] サーバログにエラー (`Unknown function` / `Couldn't load functions` 等) が出ない
 
-## 12. 検証結果のフィードバック
+## 12. 検証結果のフィードバック (次セッション引き継ぎ用)
 
-PASS 項目 / FAIL 項目を Phase D 検証時に別途記録 (`~/docs-workspace/animated-java/tsb-phase-d-results.md` 等を新規作成、 EC2 オリエンテーション資料側に置くと作業ログとして残しやすい)。 FAIL があれば :
-- (a) 設計バグ → 該当箇所の docs / 実装を改修、 commit + push
-- (b) 環境依存 → 検証手順 (このファイル) に注記追加
-- (c) AJ 本体改造で追従が必要 → Phase B-1.6 / Phase B-2 / Phase C のスコープに組み込む
+### 12-1. 結果報告テンプレート
+
+検証が終わったら、 以下のテンプレートを埋めて次セッションのラヴィに渡す
+(チャット冒頭に貼り付け or `~/docs-workspace/animated-java/tsb-phase-d-results.md` を新規作成して中身を保存)。
+
+```markdown
+# TSB 実機テスト結果 (YYYY-MM-DD)
+
+## 環境
+- Blockbench バージョン : 5.1.4
+- MC server : Vanilla 1.20.4
+- AJ プラグイン HEAD : <SHA、 例 f5378f3>
+- 検証 blueprint : axia (+ axia_clone)
+- TSB 設定 : Quantization=5, CellsPerTick=1000, MaxLineBytes=1000000, SilentUninstall=true
+
+## 結果サマリ
+
+| テスト | 結果 | MSPT (load 中 / アイドル) | 備考 |
+|---|---|---|---|
+| 1. 出力ファイル構造 | PASS / FAIL |  |  |
+| 2. 単 bp 段階展開 | PASS / FAIL | <ms> / <ms> |  |
+| 3. cleanup 動作 | PASS / FAIL |  | silent true/false 両方 |
+| 4. 並列 load (2 bp 同時) | PASS / FAIL | <ms> / <ms> |  |
+| 5. priority-aware 手動注入 | PASS / FAIL |  | 単 bp + 2 bp |
+| 6. load 中 reload | PASS / FAIL |  | 削除アニメパターン含む |
+
+## FAIL 詳細 (該当時)
+
+### テスト N
+- 期待 : <docs に書いた期待挙動>
+- 実際 : <観察したこと>
+- ログ抜粋 : <server log の該当行、 もしくは /data get の出力>
+- 推測される原因カテゴリ : 設計バグ / 環境依存 / 改造未追従
+
+## 次セッションで進めて欲しい対応
+
+- [ ] FAIL 修正 (具体的なテスト番号 + 原因カテゴリ)
+- [ ] 完全 PASS なら Phase B-1.6 (UI 拡張) or Phase C (再生側) のどちらに進む
+
+## その他気付き
+
+(MSPT のチューニング余地、 想定外の挙動、 docs の説明不足箇所 等)
+```
+
+### 12-2. FAIL ケース → 修正対象ファイルのマッピング
+
+FAIL 報告を受けたとき、 次セッションのラヴィが最初に当たる場所 :
+
+| FAIL の症状 | 一次調査ファイル | 関連 docs |
+|---|---|---|
+| ファイル不在 / 余分なファイル (テスト 1) | `src/systems/datapackCompiler/createAnimationStorageTsb.ts` の file map ループ (`for (const pri of PRIORITIES) { files.set(...) }`) | `tsb-known-issues/parallel-project-load.md` |
+| init_queue の出力ズレ (テスト 1 / 2) | `createAnimationStorageTsb.ts:buildInitQueue` | 同上 |
+| 段階展開が進まない (テスト 2) | `1.20.4-tsb/global.mcb` の load_tick / load_dispatch_step、 `createAnimationStorageTsb.ts:buildLoadStep` | `tsb-known-issues/parallel-project-load.md` |
+| has_work が立たない / 消えない (テスト 2 / 4) | `buildInitQueue` 末尾の has_work set、 `buildRemoveFromPriority` 末尾の全 priority 空判定 | 同上 |
+| cleanup の残骸 (テスト 3) | `createAnimationStorageTsb.ts:buildCleanup` の 3 priority queue_order 削除 + has_work クリア | `tsb-known-issues/cleanup-on-load-removed.md` |
+| silent uninstall が効かない (テスト 3) | `1.20.4-tsb/main.mcb` の `IF (!tsb_silent_uninstall)` 分岐、 Blueprint Settings | `tsb-known-issues/cleanup-on-load-removed.md` 第 3 段階 |
+| round-robin が公平に回らない (テスト 4) | `createAnimationStorageTsb.ts:buildRotateActive` (`queue_order.<pri>[0]` 削除 + 末尾 append の 2 行) | `tsb-known-issues/parallel-project-load.md` |
+| priority 順序が崩れる (テスト 5) | `1.20.4-tsb/global.mcb` の load_tick の 3 priority 判定順 (immediate → high → low の return run チェーン) | 同上 |
+| 削除アニメ参照エラー (テスト 6) | `buildInitQueue` の queue 上書き (= set value、 削除アニメ参照が新値に置き換わる前提)、 もしくは旧 queue が `data modify append` で残るバグ | 同上の「リロード時の挙動」 |
+| TPS 崩れ (テスト 4 / 全体) | `cells_per_tick` Blueprint Setting の調整 + プロファイル取得 (`/debug start`) | `~/docs-workspace/next-tasks/animated-java-optimization.md` の A-5 セクション |
+
+### 12-3. FAIL 分類別の対応方針
+
+- **(a) 設計バグ** : 該当ファイル + テストケースを改修 → vitest 通過確認 → prod build 0 errors → commit + push
+- **(b) 環境依存** : 検証手順 (このファイル) に注記追加、 もしくはトラブルシューティング (§ 10) に新規ケース追加
+- **(c) AJ 本体改造で追従が必要** : Phase B-1.6 / Phase B-2 / Phase C のスコープに組み込む、 `~/docs-workspace/next-tasks/animated-java-optimization.md` の Phase 進捗表に追記
 
 ## 関連ドキュメント
 
