@@ -4,13 +4,13 @@ import { type IRenderedAnimation } from '../animationRenderer'
 import { type IRenderedVariant } from '../rigRenderer'
 import OBJECTIVES from './objectives'
 
-// mc-build の `<%...%>` 式評価結果を文字列化する際、 TextComponent インスタンスが
-// 引数無し `toString()` 経由で SNBT 化されてしまう (defaultMinecraftVersion = 1.21.11 が効く)。
-// 1.20.4 では text component は JSON 必須 (`"color": "red"`)、 SNBT (`"color": red`) は構文エラー。
-// → TELLRAW.* を文字列で返すよう変更し、 ターゲットバージョンを直接渡して toString する。
+// book-and-quill の TextComponentStringifier は値側の identifier 形式文字列 (`red`,
+// `yellow`, `aj.id`, `show_text` 等) を REQUIRE_DOUBLE_QUOTES flag に関係なく unquoted で
+// 返してしまうため、 1.20.4 で tellraw が `{"color": red}` の SNBT 形式となりパースエラーになる。
+// stringifier 経由を完全にやめ、 toJSON で取得した plain object を JSON.stringify でそのまま
+// 文字列化する。 これでターゲットバージョンに関係なく純粋 JSON が出る。
 // 詳細: docs/tsb-known-issues/tellraw-snbt-on-1.20.4.md
-const renderTextComponent = (tc: TextComponent): string =>
-	tc.toString(true, Project!.animated_java.target_minecraft_version)
+const renderTextComponent = (tc: TextComponent): string => JSON.stringify(tc.toJSON(true))
 
 const TELLRAW_PREFIX = () =>
 	new TextComponent([
