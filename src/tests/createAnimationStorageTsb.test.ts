@@ -242,6 +242,8 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'execute if data storage aj.demo_boss:variants d run data remove storage aj.demo_boss:variants d',
 				'execute if data storage aj.demo_boss:state d run data remove storage aj.demo_boss:state d',
 				'execute if data storage aj.demo_boss:tmp d run data remove storage aj.demo_boss:tmp d',
+				'execute if data storage aj.global:state d.queue_order[{id:"aj:demo_boss"}] run data remove storage aj.global:state d.queue_order[{id:"aj:demo_boss"}]',
+				'execute if data storage aj.global:state d.active."aj:demo_boss" run data remove storage aj.global:state d.active."aj:demo_boss"',
 				'function aj:demo_boss/remove_animation_objectives'
 			),
 			[`${P}/expand/idle/p0.mcfunction`]: mc(
@@ -270,16 +272,26 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				'data modify storage aj.demo_boss:state d.queue.immediate set value []',
 				'data modify storage aj.demo_boss:state d.queue.high set value []',
 				'data modify storage aj.demo_boss:state d.queue.low set value ["aj:demo_boss/expand/idle/p0","aj:demo_boss/expand/attack/p0","aj:demo_boss/expand_variants/attack"]',
-				'schedule function aj:demo_boss/load/tick 1t replace'
+				'execute unless data storage aj.global:state d.active."aj:demo_boss" run data modify storage aj.global:state d.queue_order append value {id:"aj:demo_boss"}',
+				'data modify storage aj.global:state d.active."aj:demo_boss" set value 1b'
 			),
-			[`${P}/load/tick.mcfunction`]: mc(
+			[`${P}/load/step.mcfunction`]: mc(
 				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/pop/immediate',
 				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/pop/high',
 				'execute if data storage aj.demo_boss:state d.queue.low[0] run function aj:demo_boss/load/pop/low',
 				'',
-				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run schedule function aj:demo_boss/load/tick 1t replace',
-				'execute unless data storage aj.demo_boss:state d.queue.immediate[0] if data storage aj.demo_boss:state d.queue.high[0] run schedule function aj:demo_boss/load/tick 1t replace',
-				'execute unless data storage aj.demo_boss:state d.queue.immediate[0] unless data storage aj.demo_boss:state d.queue.high[0] if data storage aj.demo_boss:state d.queue.low[0] run schedule function aj:demo_boss/load/tick 1t replace'
+				'execute if data storage aj.demo_boss:state d.queue.immediate[0] run return run function aj:demo_boss/load/rotate_active',
+				'execute if data storage aj.demo_boss:state d.queue.high[0] run return run function aj:demo_boss/load/rotate_active',
+				'execute if data storage aj.demo_boss:state d.queue.low[0] run return run function aj:demo_boss/load/rotate_active',
+				'function aj:demo_boss/load/remove_from_global'
+			),
+			[`${P}/load/rotate_active.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order[0]',
+				'data modify storage aj.global:state d.queue_order append value {id:"aj:demo_boss"}'
+			),
+			[`${P}/load/remove_from_global.mcfunction`]: mc(
+				'data remove storage aj.global:state d.queue_order[0]',
+				'data remove storage aj.global:state d.active."aj:demo_boss"'
 			),
 			[`${P}/load/pop/immediate.mcfunction`]: mc(
 				'data modify storage aj.demo_boss:tmp d.pop set from storage aj.demo_boss:state d.queue.immediate[0]',
@@ -356,6 +368,97 @@ describe('createAnimationStorageTsb - batch splitting (cells_per_tick)', () => {
 		expect(
 			result.files.get('data/aj/functions/demo/load/init_queue.mcfunction')!.content
 		).toContain('d.queue.low set value ["aj:demo/expand/run/p0","aj:demo/expand/run/p1"]')
+
+		// init_queue は schedule を廃止し、 global active + queue_order への登録に置き換わっている。
+		const initQueue = result.files.get(
+			'data/aj/functions/demo/load/init_queue.mcfunction'
+		)!.content as string
+		expect(initQueue).not.toContain('schedule function')
+		expect(initQueue).toContain(
+			'execute unless data storage aj.global:state d.active."aj:demo" run data modify storage aj.global:state d.queue_order append value {id:"aj:demo"}'
+		)
+		expect(initQueue).toContain('data modify storage aj.global:state d.active."aj:demo" set value 1b')
+
+		// 旧 load/tick は出力されない、 代わりに load/step が出る。
+		expect(result.files.has('data/aj/functions/demo/load/tick.mcfunction')).toBe(false)
+		expect(result.files.has('data/aj/functions/demo/load/step.mcfunction')).toBe(true)
+		expect(result.files.has('data/aj/functions/demo/load/rotate_active.mcfunction')).toBe(true)
+		expect(result.files.has('data/aj/functions/demo/load/remove_from_global.mcfunction')).toBe(
+			true
+		)
+	})
+})
+
+describe('createAnimationStorageTsb - global キュー化 (Phase B-1.5)', () => {
+	it('cleanup は global state の自 bp 痕跡を削除する 2 行を含む', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('run', [frame({ a: IDENT })], ['a'])
+		const result = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:demo',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		const cleanup = result.files.get('data/aj/functions/demo/cleanup.mcfunction')!.content as string
+		expect(cleanup).toContain(
+			'execute if data storage aj.global:state d.queue_order[{id:"aj:demo"}] run data remove storage aj.global:state d.queue_order[{id:"aj:demo"}]'
+		)
+		expect(cleanup).toContain(
+			'execute if data storage aj.global:state d.active."aj:demo" run data remove storage aj.global:state d.active."aj:demo"'
+		)
+	})
+
+	it('animations 空でも cleanup は global state 削除行を含む (= datapack disable 時に global 痕跡を消せる)', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const result = await createAnimationStorageTsb(rig, [], {
+			blueprintId: 'aj:empty',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		const cleanup = result.files.get('data/aj/functions/empty/cleanup.mcfunction')!.content as string
+		expect(cleanup).toContain(
+			'execute if data storage aj.global:state d.queue_order[{id:"aj:empty"}] run data remove storage aj.global:state d.queue_order[{id:"aj:empty"}]'
+		)
+		// animations が空のときは remove_animation_objectives も呼ばない (既存仕様)。
+		expect(cleanup).not.toContain('remove_animation_objectives')
+	})
+
+	it('animations 空のときは init_queue が global active への登録もしない (空 queue でも tick タグが回るのを抑制)', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const result = await createAnimationStorageTsb(rig, [], {
+			blueprintId: 'aj:empty',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		const initQueue = result.files.get(
+			'data/aj/functions/empty/load/init_queue.mcfunction'
+		)!.content as string
+		expect(initQueue).not.toContain('aj.global:state')
+	})
+
+	it('別の bpId で生成すると active membership / queue_order の compound キーが個別に埋め込まれる', async () => {
+		const rig = { nodes: { a: boneNode('a') }, variants: {} } as unknown as IRenderedRig
+		const anim = makeAnimation('run', [frame({ a: IDENT })], ['a'])
+		const bp1 = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:boss_a',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		const bp2 = await createAnimationStorageTsb(rig, [anim], {
+			blueprintId: 'aj:boss_b',
+			quantizationDigits: 5,
+			cellsPerTick: 1000,
+			maxLineBytes: 1_000_000,
+		})
+		const iq1 = bp1.files.get('data/aj/functions/boss_a/load/init_queue.mcfunction')!.content as string
+		const iq2 = bp2.files.get('data/aj/functions/boss_b/load/init_queue.mcfunction')!.content as string
+		expect(iq1).toContain('{id:"aj:boss_a"}')
+		expect(iq1).not.toContain('boss_b')
+		expect(iq2).toContain('{id:"aj:boss_b"}')
+		expect(iq2).not.toContain('boss_a')
 	})
 })
 
