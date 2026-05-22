@@ -325,9 +325,15 @@ export const TEXT_DISPLAY_COPY_TEXT_ACTION = new Action(
 			}
 
 			try {
-				const text = TextComponent.fromString(selected.text, {
-					minecraftVersion: Project.animated_java.target_minecraft_version,
-				}).toString(true, Project.animated_java.target_minecraft_version)
+				// book-and-quill の `toString` 経路は値側 identifier が unquoted で出る
+				// バグがあるため、 1.20.4 ターゲットでは SNBT パースエラーになる
+				// (詳細: docs/tsb-known-issues/tellraw-snbt-on-1.20.4.md)。 1.21.5+ でも
+				// JSON は valid なので、 JSON.stringify でバイパスして全バージョン JSON 出力に統一。
+				const text = JSON.stringify(
+					TextComponent.fromString(selected.text, {
+						minecraftVersion: Project.animated_java.target_minecraft_version,
+					}).toJSON(true)
+				)
 				clipboard.writeText(text)
 				Blockbench.showQuickMessage(translate('tool.text_display.copy_text.copied'), 2000)
 			} catch (e) {

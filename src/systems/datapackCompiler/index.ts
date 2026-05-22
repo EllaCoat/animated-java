@@ -153,10 +153,15 @@ async function generateRootEntityPassengers(version: string, rig: IRenderedRig) 
 					passenger.set(
 						'text',
 						// String JSON text format
+						// book-and-quill stringifier は値側 identifier を unquoted で返すバグがあるため
+						// (詳細: docs/tsb-known-issues/tellraw-snbt-on-1.20.4.md)、 1.20.4 では SNBT が
+						// パースエラーになる。 JSON.stringify バイパスで純粋 JSON 出力に統一する。
 						new NbtString(
-							TextComponent.fromString(node.text, {
-								minecraftVersion: version,
-							}).toString(true, version)
+							JSON.stringify(
+								TextComponent.fromString(node.text, {
+									minecraftVersion: version,
+								}).toJSON(true)
+							)
 						)
 					)
 				} else {
