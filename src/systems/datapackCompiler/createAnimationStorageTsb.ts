@@ -49,7 +49,7 @@ export async function createAnimationStorageTsb(
 		content: buildIdMappingComment(idMap, opts.blueprintId),
 	})
 	files.set(`${fnPathPrefix}/cleanup.mcfunction`, {
-		content: buildCleanup(storageNs),
+		content: buildCleanup(storageNs, animations),
 	})
 
 	const expandRefsByAnim: { anim: string; refs: string[] }[] = []
@@ -139,18 +139,21 @@ function buildIdMappingComment(idMap: IdMap, blueprintId: string): string {
 	return lines.join('\n') + '\n'
 }
 
-function buildCleanup(storageNs: string): string {
+function buildCleanup(storageNs: string, animations: IRenderedAnimation[]): string {
 	// `data remove storage` はパス必須 + 対象が無いと throw するため、
 	// 全 TSB データを固定ラッパー段 `d` 配下に置き、 execute if data でガードする。
 	const kinds = ['anim', 'variants', 'state', 'tmp'] as const
-	return (
-		kinds
-			.map(
-				k =>
-					`execute if data storage ${storageNs}:${k} d run data remove storage ${storageNs}:${k} d`
-			)
-			.join('\n') + '\n'
+	const storageLines = kinds.map(
+		k => `execute if data storage ${storageNs}:${k} d run data remove storage ${storageNs}:${k} d`
 	)
+	// animation 単位の scoreboard objective (aj.<animationName>.frame) を削除。
+	// `scoreboard objectives remove` は対象が無くても silent fail のためガード不要。
+	// グローバル共有の objectives (aj.i / aj.id / aj.is_rig_loaded / aj.tween_duration) は
+	// 他の blueprint も使うため削除しない。
+	const scoreboardLines = animations.map(
+		a => `scoreboard objectives remove aj.${a.storage_name}.frame`
+	)
+	return [...storageLines, ...scoreboardLines].join('\n') + '\n'
 }
 
 function writeExpandFunctions(

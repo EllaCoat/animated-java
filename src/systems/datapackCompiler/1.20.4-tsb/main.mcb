@@ -4,9 +4,12 @@ function on_load {
 	data modify storage <%project_storage%> rig_hash set value <%"'" + rig_hash + "'"%>
 
 	IF (tsb_optimized_export) {
-		# TSB Optimized Export : 4 storage を namespace 単位で cleanup
-		# (anim NBT は on_load では展開せず、 段階展開キュー経由でロード)
-		function <%blueprint_id%>/cleanup
+		# TSB Optimized Export : on_load では cleanup を呼ばない (load 中サーバ再起動 / 戦闘中 reload で
+		# プレイヤーの進行を巻き戻す危険があるため)。 cleanup は datapack disable 直前に
+		# ボス制御 mcfunction から手動で呼ぶ運用に統一。 詳細は
+		# docs/tsb-known-issues/cleanup-on-load-removed.md。
+		# anim NBT は on_load では展開せず、 段階展開キュー経由でロード。
+		# 既存ストレージへの set value は単純上書きなので残骸 cell があっても新 datapack の値で上書きされる。
 	} ELSE IF (has_animations && use_storage_for_animation) {
 		REPEAT (animations) as animation {
 			data remove storage <%project_storage%>/animations <%animation.storage_name%>
