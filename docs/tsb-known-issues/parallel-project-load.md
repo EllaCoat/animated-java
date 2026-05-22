@@ -319,7 +319,8 @@ reload 中に進行中だった expand が中断された場合の挙動 :
 
 - 上位仕様 : `~/docs-workspace/next-tasks/animated-java-optimization.md`
 - 出力サンプル : `~/docs-workspace/animated-java/tsb-output-sample.md`
-- 検証手順 : `~/docs-workspace/animated-java/tsb-phase-b1-verification.md`
+- 文字列レベル検証 : `~/docs-workspace/animated-java/tsb-phase-b1-verification.md`
+- 実機テスト手順 : `../tsb-runtime-test.md` (Blockbench + Vanilla 1.20.4 server で priority-aware 含む全機能を検証)
 - 設計経緯 : 本ファイル
 - cleanup の経緯 : `cleanup-on-load-removed.md` (on_load 自動 cleanup 削除)
 - データ remove 構文の経緯 : `cleanup-data-remove-syntax.md` (ラッパー段 d 導入)
