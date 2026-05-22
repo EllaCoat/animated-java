@@ -62,7 +62,19 @@ export async function createAnimationStorageTsb(
 	})
 
 	const expandRefsByAnim: { anim: string; refs: string[] }[] = []
-	const variantsExpandRefs: string[] = []
+
+	// variant データは anim 単位ではなく project 単位の単一関数に集約する :
+	//   - 1 anim = 1 行 set value (variant cells は frame_idx 単位で疎、 N 行並べても MAX_LINE_BYTES 内)
+	//   - 段階展開せず 1 tick で flush できる軽量データ → expand というより「メタデータ流し込み」
+	//   - loaded フラグも project 単位 boolean (`d.loaded_variants`) に縮め、 force_load の guard を簡素化
+	const variantsContent = buildProjectVariantsExpand(animations, rig, storageNs)
+	const variantsExpandRef =
+		variantsContent !== null ? `${fnRef}/expand_variants` : null
+	if (variantsContent !== null) {
+		files.set(`${fnPathPrefix}/expand_variants.mcfunction`, {
+			content: variantsContent,
+		})
+	}
 
 	for (const anim of animations) {
 		const expandRefs = writeExpandFunctions(
@@ -76,24 +88,17 @@ export async function createAnimationStorageTsb(
 		)
 		expandRefsByAnim.push({ anim: anim.storage_name, refs: expandRefs })
 
+		// force_load 同期経路 : variant 未ロード時のみ project 全 variant を同期展開してから
+		// bone cells を展開する。 variants が apply_frame の前提条件 (variant 切替 storage 参照) のため。
 		files.set(`${fnPathPrefix}/force_load/${anim.storage_name}.mcfunction`, {
-			content: buildForceLoad(expandRefs),
+			content: buildForceLoad(expandRefs, variantsExpandRef, storageNs),
 		})
-
-		const variantsContent = buildVariantsExpand(anim, rig, storageNs)
-		if (variantsContent !== null) {
-			files.set(
-				`${fnPathPrefix}/expand_variants/${anim.storage_name}.mcfunction`,
-				{ content: variantsContent }
-			)
-			variantsExpandRefs.push(`${fnRef}/expand_variants/${anim.storage_name}`)
-		}
 	}
 
 	files.set(`${fnPathPrefix}/load/init_queue.mcfunction`, {
 		content: buildInitQueue(
 			expandRefsByAnim,
-			variantsExpandRefs,
+			variantsExpandRef,
 			storageNs,
 			opts.blueprintId
 		),
@@ -346,49 +351,72 @@ function buildLocatorFramesObj(
 	return `{${parts.join(',')}}`
 }
 
-function buildForceLoad(expandRefs: string[]): string {
-	if (expandRefs.length === 0) return '\n'
-	return expandRefs.map(r => `function ${r} {_: ""}`).join('\n') + '\n'
+function buildForceLoad(
+	expandRefs: string[],
+	variantsExpandRef: string | null,
+	storageNs: string
+): string {
+	const lines: string[] = []
+	// variant 同期ロード : `d.loaded_variants` 未立てなら project 全 variant を一括展開してから bone へ。
+	// project 単位 boolean なのでガード 1 行で済む。
+	if (variantsExpandRef !== null) {
+		lines.push(
+			`execute unless data storage ${storageNs}:state d.loaded_variants run function ${variantsExpandRef} {_: ""}`
+		)
+	}
+	for (const r of expandRefs) lines.push(`function ${r} {_: ""}`)
+	if (lines.length === 0) return '\n'
+	return lines.join('\n') + '\n'
 }
 
-function buildVariantsExpand(
-	anim: IRenderedAnimation,
+function buildProjectVariantsExpand(
+	animations: IRenderedAnimation[],
 	rig: IRenderedRig,
 	storageNs: string
 ): string | null {
-	const parts: string[] = []
-	for (let i = 0; i < anim.frames.length; i++) {
-		const frame = anim.frames[i]
-		if (!frame.variants || frame.variants.length === 0) continue
-		const variantUuid = frame.variants[0]
-		const variant = rig.variants[variantUuid]
-		if (!variant) continue
-		const name = escapeNbtString(variant.name)
-		const condition = frame.variants_execute_condition
-			? escapeNbtString(`${frame.variants_execute_condition} `)
-			: ''
-		parts.push(`"${i}":{name:"${name}",condition:"${condition}"}`)
+	const variantLines: string[] = []
+	for (const anim of animations) {
+		const parts: string[] = []
+		for (let i = 0; i < anim.frames.length; i++) {
+			const frame = anim.frames[i]
+			if (!frame.variants || frame.variants.length === 0) continue
+			const variantUuid = frame.variants[0]
+			const variant = rig.variants[variantUuid]
+			if (!variant) continue
+			const name = escapeNbtString(variant.name)
+			const condition = frame.variants_execute_condition
+				? escapeNbtString(`${frame.variants_execute_condition} `)
+				: ''
+			parts.push(`"${i}":{name:"${name}",condition:"${condition}"}`)
+		}
+		if (parts.length === 0) continue
+		variantLines.push(
+			`$data modify storage ${storageNs}:variants d.${anim.storage_name}$(_) set value {${parts.join(',')}}`
+		)
 	}
-	if (parts.length === 0) return null
-	return (
-		[
-			`$data modify storage ${storageNs}:variants d.${anim.storage_name}$(_) set value {${parts.join(',')}}`,
-			`$data modify storage ${storageNs}:state d.loaded_variants.${anim.storage_name}$(_) set value 1b`,
-		].join('\n') + '\n'
+	if (variantLines.length === 0) return null
+	// loaded_variants は project 単位 boolean に縮約。 force_load の guard が `d.loaded_variants`
+	// 1 個で済むようになり、 アニメ単位の重複立てが消える。
+	variantLines.push(
+		`$data modify storage ${storageNs}:state d.loaded_variants$(_) set value 1b`
 	)
+	return variantLines.join('\n') + '\n'
 }
 
 function buildInitQueue(
 	expandRefsByAnim: { anim: string; refs: string[] }[],
-	variantsExpandRefs: string[],
+	variantsExpandRef: string | null,
 	storageNs: string,
 	bpId: string
 ): string {
 	const buckets: Record<Priority, string[]> = { immediate: [], high: [], low: [] }
-	// Phase B-1 暫定 : priority UI 未実装のため、 全アニメ + variant を low に積む。
+	// Phase B-1 暫定 : priority UI 未実装のため、 bone expand は全 anim 分を low に積む。
 	// Phase B-1.6 (UI 拡張) で immediate / high への振り分けを導入予定。
+	// variant は apply_frame の前提条件 (variant 切替 storage 参照) のため immediate 固定 :
+	//   - 1 ref = 1 関数 (project 単位集約済み) で 1 tick で flush 完了 → idle 復帰早い
+	//   - global priority 順序保証で variant 先 → bone 後 のロード順序が成立
 	for (const { refs } of expandRefsByAnim) buckets.low.push(...refs)
-	for (const v of variantsExpandRefs) buckets.low.push(v)
+	if (variantsExpandRef !== null) buckets.immediate.push(variantsExpandRef)
 
 	const formatList = (arr: string[]): string =>
 		arr.length === 0 ? '[]' : `[${arr.map(r => `"${r}"`).join(',')}]`
