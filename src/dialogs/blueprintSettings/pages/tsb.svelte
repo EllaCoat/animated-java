@@ -8,6 +8,7 @@
 	let tsbCellsPerTick = $state(Project.animated_java.tsb_cells_per_tick)
 	let tsbMaxLineBytes = $state(Project.animated_java.tsb_max_line_bytes)
 	let tsbSilentUninstall = $state(Project.animated_java.tsb_silent_uninstall)
+	let tsbLoadDebugLog = $state(Project.animated_java.tsb_load_debug_log)
 
 	onDestroy(() => {
 		Project.animated_java.tsb_optimized_export = tsbOptimizedExport
@@ -15,6 +16,7 @@
 		Project.animated_java.tsb_cells_per_tick = tsbCellsPerTick
 		Project.animated_java.tsb_max_line_bytes = tsbMaxLineBytes
 		Project.animated_java.tsb_silent_uninstall = tsbSilentUninstall
+		Project.animated_java.tsb_load_debug_log = tsbLoadDebugLog
 	})
 </script>
 
@@ -57,6 +59,12 @@
 			label="Silent Uninstall (suppress UNINSTALL tellraw)"
 			description="When the cleanup function calls remove_animation_objectives, suppress the UNINSTALL tellraw message that broadcasts 'Successfully uninstalled <blueprint_id>' to all players. Recommended for distribution builds where end-users should not see internal cleanup messages. Disable to keep the original AJ behaviour for debugging or AJ-style use."
 			bind:value={tsbSilentUninstall}
+		></Checkbox>
+
+		<Checkbox
+			label="Load Debug Log (staged load progress tellraw)"
+			description="Emit tellraw messages when each animation finishes its staged expand load, when variants finish loading, and when all anims finish loading (queue cleared). Server-side only debug aid for confirming the priority-aware staged loader on a live server. Disable for distribution builds."
+			bind:value={tsbLoadDebugLog}
 		></Checkbox>
 	{/if}
 </div>

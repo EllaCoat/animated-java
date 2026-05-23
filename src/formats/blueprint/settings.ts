@@ -46,6 +46,7 @@ export interface BlueprintSettings {
 	tsb_cells_per_tick: number
 	tsb_max_line_bytes: number
 	tsb_silent_uninstall: boolean
+	tsb_load_debug_log: boolean
 	// Plugin Settings
 	baked_animations: boolean
 	json_file: string
@@ -93,6 +94,7 @@ export const defaultValues: BlueprintSettings = {
 	tsb_cells_per_tick: 1000,
 	tsb_max_line_bytes: 1_000_000,
 	tsb_silent_uninstall: true,
+	tsb_load_debug_log: false,
 
 	// Plugin Settings
 	baked_animations: true,
