@@ -28,10 +28,12 @@ function on_load {
 	IF (tsb_optimized_export && has_animations) {
 		# Phase C : bp 単位 objective 追加 (idempotent、 reload で重複実行されても無害)。
 		# DUR / TP_DUR は interpolation_duration / teleportation_duration の scoreboard 管理化
-		# (Phase A A-9)、 CURRENT_ANIM / BONE_ID / LOCATOR_ID は再生側集約 (Phase C 案 P / R)。
+		# (Phase A A-9)、 CURRENT_ANIM / FRAME_BP / BONE_ID / LOCATOR_ID は再生側集約 (Phase C 案 P / R)。
+		# FRAME_BP は同時再生 1 anim まで前提の共通 frame counter。
 		scoreboard objectives add <%OBJECTIVES.DUR(blueprint_id)%> dummy
 		scoreboard objectives add <%OBJECTIVES.TP_DUR(blueprint_id)%> dummy
 		scoreboard objectives add <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> dummy
+		scoreboard objectives add <%OBJECTIVES.FRAME_BP(blueprint_id)%> dummy
 		scoreboard objectives add <%OBJECTIVES.BONE_ID(blueprint_id)%> dummy
 		scoreboard objectives add <%OBJECTIVES.LOCATOR_ID(blueprint_id)%> dummy
 
@@ -40,6 +42,39 @@ function on_load {
 		# fakeplayer 名は `:` を `.` に置換 (objective 名と同じ理由)。
 		scoreboard players set #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%> <%interpolation_duration%>
 		scoreboard players set #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.TP_DUR(blueprint_id)%> <%teleportation_duration%>
+
+		# Phase C 案 P : anim メタテーブルを on_load で同期書き込み (サイズ < 1KB、 遅延ロード不要)。
+		# `aj.<bp>:meta d.anims[N]` = `{dur, lp, dly, hv, hl, (name?)}` を anim_id 順に list で配置。
+		# `d.last_id` = anim 総数 - 1 (range check 用)。 debug_mode のときのみ各 entry に name フィールドを追加。
+		# `hv` = has variant cells、 `hl` = has last_frame_effects (loop + delay=0 + 最終 frame に副作用) で
+		# `_zzz_on_tick.mcfunction` の dispatch 判定に使う。
+		<%%
+			if (has_animations) {
+				const animsList = animations.map(anim => {
+					const lp = anim.loop_mode === 'once' ? 0 : anim.loop_mode === 'loop' ? 1 : 2
+					const dly = anim.loop_delay || 0
+					const hv = anim.frames.some(f => f.variants && f.variants.length > 0) ? 1 : 0
+					const lastFrame = anim.frames[anim.frames.length - 1]
+					const modifiedEffectNodes = lastFrame
+						? Object.values(anim.modified_nodes).filter(
+							n => n.type === 'locator' && lastFrame.node_transforms[n.uuid]
+						)
+						: []
+					const hasLastFrameEffects =
+						modifiedEffectNodes.length > 0 ||
+						(lastFrame && lastFrame.variants && lastFrame.variants.length > 0) ||
+						(lastFrame && lastFrame.function)
+					const hl = (anim.loop_mode === 'loop' && dly === 0 && hasLastFrameEffects) ? 1 : 0
+					const parts = [`dur:${anim.duration}`, `lp:${lp}b`, `dly:${dly}`, `hv:${hv}b`, `hl:${hl}b`]
+					if (debug_mode) {
+						parts.push(`name:"${anim.storage_name.replace(/"/g, '\\"')}"`)
+					}
+					return `{${parts.join(',')}}`
+				})
+				emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.last_id set value ${animations.length - 1}`)
+				emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.anims set value [${animsList.join(',')}]`)
+			}
+		%%>
 
 		# Phase C 案 V : variant 適用テーブルを on_load で同期書き込み (サイズ < 1KB)。
 		# `aj.<bp>:meta d.variants.<variant>.<bone_id>` = `{cmd?: int, cfg?: compound}`、 影響しない
@@ -124,11 +159,19 @@ dir root {
 		}
 
 		IF (has_animations) {
-			# animated_java:global/root/on_tick already runs this right before calling this function.
-			# data_manager prep read
+			IF (tsb_optimized_export) {
+				# Phase C 集約 : current_anim score で再生中アニメを 1 個に絞り、 _zzz_on_tick を 1 回呼ぶ。
+				# current_anim = -1 (停止) なら matches 0.. を抜けて何もしない (純正の pause_all + tag 削除 と等価)。
+				execute if score @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> matches 0.. run block tick_animation {
+					data remove storage <%project_storage.replace(':', '.')%>:tmp d.tmp
+					execute store result storage <%project_storage.replace(':', '.')%>:tmp d.tmp.anim_id int 1 run scoreboard players get @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%>
+					function <%blueprint_id%>/animations/_zzz_on_tick with storage <%project_storage.replace(':', '.')%>:tmp d.tmp
+				}
+			} ELSE IF (animations.length > 8) {
+				# animated_java:global/root/on_tick already runs this right before calling this function.
+				# data_manager prep read
 
-			# Once we have more than 8 animations, calling a function only if at least one animation is playing is more efficient.
-			IF (animations.length > 8) {
+				# Once we have more than 8 animations, calling a function only if at least one animation is playing is more efficient.
 				# If no animations are playing, we can skip all animation logic.
 				# This helps reduce ticking commands for rigs that are idle.
 				execute \
@@ -238,6 +281,7 @@ IF (!auto_update_rig_orientation) {
 
 IF (has_animations) {
 	dir animations {
+		IF (!tsb_optimized_export) {
 		REPEAT (animations) as animation {
 			dir <%animation.storage_name%> {
 				function play {
@@ -627,8 +671,151 @@ IF (has_animations) {
 				tag @s remove <%TAGS.ANIMATION_PLAYING(blueprint_id, animation.storage_name)%>
 			}
 		}
+		}
 
 		IF (tsb_optimized_export) {
+			# Phase C 案 P : アニメ別 N コピーを廃止して共通実装 + アニメ別 wrapper の二段構成に集約。
+			# - 共通関数 : _play / _stop / _pause / _resume / _next_frame / _set_frame / _apply_frame / _tween
+			#   + _zzz_on_tick / _zzz_set_frame / _zzz_apply_frame + _apply_one / _apply_bone / _apply_locator
+			# - アニメ別 wrapper (UX 維持) : <anim>/play, stop, pause, resume, next_frame, set_frame,
+			#   apply_frame, tween (各 1 行マクロで共通実装に anim_id を埋め込んで dispatch)
+			#
+			# 再生 state は score `aj.<bp>.current_anim` (-1=停止) + `aj.<bp>.frame` (bp 単位 1 個) の
+			# 2 つで管理。 同時再生 1 anim まで前提 (pause/resume は同 anim_id 前提、 別 anim 切り替えなら
+			# play で frame=0 リセット)。 純正の anim 別 FRAME / pause_all tag システムは廃止。
+
+			function _play {
+				# ARGS: {anim_id: int}
+				# アニメ再生開始。 純正の play (line 199-209) 集約版。 frame=0 で transforms_only 経由で
+				# 初期 pose を反映してから current_anim を set、 next tick から _zzz_on_tick が回る。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				$scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> $(anim_id)
+				scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
+				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_set_frame {anim_id: $(anim_id), frame: 0}
+				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+			}
+
+			function _stop {
+				# ARGS: {anim_id: int}
+				# アニメ停止。 current_anim = -1 で再生停止フラグ off、 frame = 0、 初期 pose 反映 (純正と同じ挙動)。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
+				scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
+				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_set_frame {anim_id: $(anim_id), frame: 0}
+				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+			}
+
+			function _pause {
+				# 一時停止。 current_anim を -1 にして再生停止、 frame は維持 (同 anim_id を _resume で再開可能)。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
+			}
+
+			function _resume {
+				# ARGS: {anim_id: int}
+				# 再生再開。 wrapper 経由で anim_id が埋め込まれて渡される (同 anim_id 前提、 frame は維持)。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				$scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> $(anim_id)
+			}
+
+			function _next_frame {
+				# ARGS: {anim_id: int}
+				# 純正 next_frame (line 234-242) 集約版。 frame >= dur で frame=1 にリセット (純正と同じ動作)。
+				# meta d.anims[anim_id].dur を score に展開して比較。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				$execute store result score #limit <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dur
+				execute if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 1
+				data remove storage <%project_storage.replace(':', '.')%>:tmp d
+				$data modify storage <%project_storage.replace(':', '.')%>:tmp d.anim_id set value $(anim_id)
+				execute store result storage <%project_storage.replace(':', '.')%>:tmp d.frame int 1 run scoreboard players get @s <%OBJECTIVES.FRAME_BP(blueprint_id)%>
+				execute at @s run function <%blueprint_id%>/animations/_zzz_apply_frame with storage <%project_storage.replace(':', '.')%>:tmp d
+				scoreboard players add @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 1
+			}
+
+			function _set_frame {
+				# ARGS: {anim_id: int, frame: int}
+				# frame 指定で transformation のみ更新 (interpolation なし)。 純正 line 244-254 集約版。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				data_manager prep read
+
+				$scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> $(frame)
+				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_set_frame {anim_id: $(anim_id), frame: $(frame)}
+				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+			}
+
+			function _apply_frame {
+				# ARGS: {anim_id: int, frame: int}
+				# frame 指定で transformation + variant + function keyframe をフル適用。 純正 line 256-265 集約版。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				data_manager prep read
+
+				$scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> $(frame)
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_apply_frame {anim_id: $(anim_id), frame: $(frame)}
+			}
+
+			function _tween {
+				# ARGS: {anim_id: int, duration: int, to_frame: int}
+				# 純正 tween (line 267-284) 集約版。 transforms_only で frame 0 → to_frame の補間遷移を作る。
+				# tween_duration score で _zzz_on_tick の補間制御をオーバーライド。
+				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+				$scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> $(anim_id)
+				$scoreboard players set @s <%OBJECTIVES.TWEEN_DURATION()%> $(duration)
+				$scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> $(to_frame)
+
+				scoreboard players operation #this <%OBJECTIVES.I()%> = @s <%OBJECTIVES.TWEEN_DURATION()%>
+				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_apply_frame {anim_id: $(anim_id), frame: 0}
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_apply_frame {anim_id: $(anim_id), frame: $(to_frame)}
+				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+				execute on passengers store result entity @s interpolation_duration int 1 run scoreboard players get #this <%OBJECTIVES.I()%>
+			}
+
+			# アニメ別 wrapper (UX 維持)。 各 1 行マクロで共通実装に anim_id を埋め込んで dispatch する。
+			# next_frame / play / stop / pause / resume は引数なし (anim_id 固定埋め込み)、
+			# set_frame / apply_frame / tween は frame / duration / to_frame を macro で受け流す。
+			REPEAT (animations) as animation, animIndex {
+				dir <%animation.storage_name%> {
+					function play {
+						function <%blueprint_id%>/animations/_play {anim_id: <%animIndex%>}
+					}
+					function stop {
+						function <%blueprint_id%>/animations/_stop {anim_id: <%animIndex%>}
+					}
+					function pause {
+						function <%blueprint_id%>/animations/_pause
+					}
+					function resume {
+						function <%blueprint_id%>/animations/_resume {anim_id: <%animIndex%>}
+					}
+					function next_frame {
+						function <%blueprint_id%>/animations/_next_frame {anim_id: <%animIndex%>}
+					}
+					function set_frame {
+						#ARGS: {frame: int}
+						$function <%blueprint_id%>/animations/_set_frame {anim_id: <%animIndex%>, frame: $(frame)}
+					}
+					function apply_frame {
+						#ARGS: {frame: int}
+						$function <%blueprint_id%>/animations/_apply_frame {anim_id: <%animIndex%>, frame: $(frame)}
+					}
+					function tween {
+						#ARGS: {duration: int, to_frame: int}
+						$function <%blueprint_id%>/animations/_tween {anim_id: <%animIndex%>, duration: $(duration), to_frame: $(to_frame)}
+					}
+				}
+			}
+
 			# Phase C 案 R : アニメ別 N コピーを廃止して共通 apply 関数で集約。 passenger コンテキストで
 			# 呼ばれ、 bone_id / locator_id score (sentinel -1 でない方) で軸を選択。 path 不在
 			# (このアニメで動かない bone/locator) は `if data storage` ガードで弾く。
@@ -660,6 +847,92 @@ IF (has_animations) {
 				$data modify entity @s Pos[2] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[2]
 				$data modify entity @s Rotation[0] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[4]
 				$data modify entity @s Rotation[1] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[3]
+			}
+
+			function _zzz_apply_frame {
+				# ARGS: {anim_id: int, frame: int}
+				# 案 R 集約版 : root context で anim_id/frame を tmp に書き込み、 passenger ループで
+				# 各 passenger の bone_id/locator_id を tmp に転写してから _apply_one を with 渡しで呼ぶ。
+				# variant 軸 dispatch (transforms_only tag なら skip、 frame に variant がある場合のみ)。
+				data remove storage <%project_storage.replace(':', '.')%>:tmp d
+				$data modify storage <%project_storage.replace(':', '.')%>:tmp d.anim_id set value $(anim_id)
+				$data modify storage <%project_storage.replace(':', '.')%>:tmp d.frame set value $(frame)
+				execute on passengers run block as_passenger {
+					execute store result storage <%project_storage.replace(':', '.')%>:tmp d.bone_id int 1 run scoreboard players get @s <%OBJECTIVES.BONE_ID(blueprint_id)%>
+					execute store result storage <%project_storage.replace(':', '.')%>:tmp d.locator_id int 1 run scoreboard players get @s <%OBJECTIVES.LOCATOR_ID(blueprint_id)%>
+					function <%blueprint_id%>/animations/_apply_one with storage <%project_storage.replace(':', '.')%>:tmp d
+				}
+
+				# variant 軸 dispatch。 transforms_only tag (set_frame/tween から呼ばれた場合) なら skip。
+				$execute unless entity @s[tag=<%TAGS.TRANSFORMS_ONLY()%>] if data storage <%project_storage.replace(':', '.')%>:variants d.a_$(anim_id).$(frame) run function <%blueprint_id%>/variants/_apply_at_frame with storage <%project_storage.replace(':', '.')%>:variants d.a_$(anim_id).$(frame)
+			}
+
+			function _zzz_set_frame {
+				# ARGS: {anim_id: int, frame: int}
+				# 純正 zzz/set_frame (line 338-343) 集約版。 frame 適用 + start_interpolation=-1 で瞬間反映。
+				$function <%blueprint_id%>/animations/_zzz_apply_frame {anim_id: $(anim_id), frame: $(frame)}
+				execute on passengers run data modify entity @s start_interpolation set value -1
+				return 1
+			}
+
+			function _zzz_on_tick {
+				# ARGS: {anim_id: int}  (root entity の on_tick から storage 経由で current_anim を流す)
+				# 純正 zzz/on_tick (line 287-335) 集約版。 tween 制御 + last_frame_effects + apply +
+				# loop/hold/once 判定を 1 関数で実施。 lp/dly/dur/hl は meta d.anims[anim_id] から runtime 取得。
+
+				# tween logic
+				scoreboard players remove @s <%OBJECTIVES.TWEEN_DURATION()%> 1
+				execute if score @s <%OBJECTIVES.TWEEN_DURATION()%> matches 1.. run return 1
+				execute if score @s <%OBJECTIVES.TWEEN_DURATION()%> matches 0 on passengers store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
+
+				# last_frame_effects patch (hl=1b の anim で frame=-1 のとき = loop+delay=0+副作用持ち最終 frame)
+				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {hl:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> matches -1 run function <%blueprint_id%>/animations/_lfx_dispatch {anim_id: $(anim_id)}
+
+				# apply current frame (storage 経由で _zzz_apply_frame に流す)
+				data remove storage <%project_storage.replace(':', '.')%>:tmp d
+				$data modify storage <%project_storage.replace(':', '.')%>:tmp d.anim_id set value $(anim_id)
+				execute store result storage <%project_storage.replace(':', '.')%>:tmp d.frame int 1 run scoreboard players get @s <%OBJECTIVES.FRAME_BP(blueprint_id)%>
+				function <%blueprint_id%>/animations/_zzz_apply_frame with storage <%project_storage.replace(':', '.')%>:tmp d
+
+				# loop / hold / once 判定 (runtime 動的)。 dur / dly は meta から score にロードして比較。
+				$execute store result score #dur <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dur
+				$execute store result score #dly <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dly
+
+				# loop モード (lp=1b) : 限界 = dur - 2 + dly。 dly=0 なら frame=-1、 dly>0 なら frame=0。
+				scoreboard players operation #limit <%OBJECTIVES.I()%> = #dur <%OBJECTIVES.I()%>
+				scoreboard players operation #limit <%OBJECTIVES.I()%> += #dly <%OBJECTIVES.I()%>
+				scoreboard players remove #limit <%OBJECTIVES.I()%> 2
+				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 0 run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> -1
+				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 1.. run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
+
+				# hold モード (lp=2b) : 限界 = dur - 1。 達したら current_anim=-1 (pause、 純正 line 320 の pause)。
+				scoreboard players operation #limit <%OBJECTIVES.I()%> = #dur <%OBJECTIVES.I()%>
+				scoreboard players remove #limit <%OBJECTIVES.I()%> 1
+				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:2b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
+
+				# once モード (lp=0b) : 限界 = dur - 1。 達したら _once_finish で停止 + frame=0 反映。
+				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:0b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run function <%blueprint_id%>/animations/_once_finish {anim_id: $(anim_id)}
+
+				scoreboard players add @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 1
+			}
+
+			function _once_finish {
+				# ARGS: {anim_id: int}
+				# once モード終端処理 (純正 line 326-332 の block loop_mode_stop 集約版)。
+				scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
+				scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
+				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
+				$execute at @s run function <%blueprint_id%>/animations/_zzz_set_frame {anim_id: $(anim_id), frame: 0}
+				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+			}
+
+			function _lfx_dispatch {
+				# ARGS: {anim_id: int}
+				# last_frame_effects dispatch。 _zzz_on_tick から hl=1b かつ frame=-1 のときに呼ばれる。
+				# anim 別の _lfx/<anim_id>.mcfunction (hl=1b の anim のみ生成) を呼んで最終 frame の
+				# locator/variant/function を再実行 + frame を +1 (純正 function_keyframe_loop_patch 相当)。
+				$function <%blueprint_id%>/animations/_lfx/$(anim_id)
+				scoreboard players add @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 1
 			}
 		}
 	}
@@ -844,7 +1117,14 @@ function summon {
 				execute store success score #success <%OBJECTIVES.I()%> run block try_set_frame { with storage <%temp_storage%> args
 					# Make sure we're only applying transforms when setting the summon pose.
 					tag @s add <%TAGS.TRANSFORMS_ONLY()%>
-					$execute store success score #success <%OBJECTIVES.I()%> run function <%blueprint_id%>/animations/$(animation)/zzz/set_frame with storage <%temp_storage%> args
+					IF (tsb_optimized_export) {
+						# TSB 集約版 : wrapper `<anim>/set_frame` を呼ぶ (引数 frame は args から流れる、
+						# wrapper 側で anim_id 埋め込み + _set_frame に dispatch)。 純正の zzz/set_frame
+						# (passenger context) ではなく root context で OK。
+						$execute store success score #success <%OBJECTIVES.I()%> run function <%blueprint_id%>/animations/$(animation)/set_frame with storage <%temp_storage%> args
+					} ELSE {
+						$execute store success score #success <%OBJECTIVES.I()%> run function <%blueprint_id%>/animations/$(animation)/zzz/set_frame with storage <%temp_storage%> args
+					}
 					tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
 					execute if score #success <%OBJECTIVES.I()%> matches 1 run return 1
 					# If the set_frame function fails, the animation doesn't exist, so we return an error.
