@@ -41,6 +41,50 @@ function on_load {
 		scoreboard players set #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%> <%interpolation_duration%>
 		scoreboard players set #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.TP_DUR(blueprint_id)%> <%teleportation_duration%>
 
+		# Phase C 案 V : variant 適用テーブルを on_load で同期書き込み (サイズ < 1KB)。
+		# `aj.<bp>:meta d.variants.<variant>.<bone_id>` = `{cmd?: int, cfg?: compound}`、 影響しない
+		# bone は path 不在 = no-op。 cleanup の `d` 配下 remove で消えるので残骸残りなし。
+		<%%
+			if (Object.keys(rig.variants).length > 0) {
+				const filteredBones = Object.values(rig.nodes).filter(n => BONE_TYPES.includes(n.type))
+				const variantParts = []
+				for (const variant of Object.values(rig.variants)) {
+					const bonePartsList = []
+					filteredBones.forEach((node, i) => {
+						let cmd = null
+						if (
+							node.type === 'bone' &&
+							!variant.excluded_nodes.includes(node.uuid) &&
+							variant.models[node.uuid] !== undefined
+						) {
+							const model = variant.models[node.uuid]
+							cmd = model.model === null ? 1 : model.custom_model_data
+						}
+						let cfgNbt = null
+						if (
+							!variant.excluded_nodes.includes(node.uuid) &&
+							node.configs.variants[variant.uuid] !== undefined
+						) {
+							const config = DisplayEntityConfig.fromJSON(node.configs.variants[variant.uuid])
+							if (!config.isDefault()) {
+								cfgNbt = config.toNBT(undefined, variant.is_default).toString()
+							}
+						}
+						if (cmd === null && cfgNbt === null) return
+						const parts = []
+						if (cmd !== null) parts.push(`cmd:${cmd}`)
+						if (cfgNbt !== null) parts.push(`cfg:${cfgNbt}`)
+						bonePartsList.push(`"${i}":{${parts.join(',')}}`)
+					})
+					if (bonePartsList.length === 0) continue
+					variantParts.push(`${variant.storage_name}:{${bonePartsList.join(',')}}`)
+				}
+				if (variantParts.length > 0) {
+					emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.variants set value {${variantParts.join(',')}}`)
+				}
+			}
+		%%>
+
 		# TSB Optimized Export : animation_hash 判定で reload 時のキュー再構築をスキップ。
 		# 同一値の set value は throw + success 0 になる仕様
 		# (`DataCommands.java::ERROR_MERGE_UNCHANGED`) を利用、 hash 変化時のみ init_queue。
@@ -1304,61 +1348,105 @@ dir remove {
 
 IF (Object.keys(rig.variants).length > 1) {
 	dir variants {
-		REPEAT (Object.values(rig.variants)) as variant {
-			dir <%variant.name%> {
-				function apply {
-					debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+		IF (tsb_optimized_export) {
+			# Phase C 案 V : variant 適用関数を共通 1 ファイル + wrapper N 個 + dispatch 1 個に集約。
+			# 純正は variant × bone 単位 N コピー (axia なら 7 + 35 = 42 ファイル) だったが、 ここでは
+			# storage `aj.<bp>:meta d.variants.<variant>.<bone_id>` (= on_load で書き込み済) を経由した
+			# 共通 _apply.mcfunction で集約 (axia なら 7 + 1 + 1 = 9 ファイル、 -33)。 影響しない bone は
+			# path 不在 = no-op (`if data storage` ガード)。 wrapper apply.mcfunction は UX 維持用、
+			# internal dispatch (_apply_at_frame) は wrapper をバイパスして _apply を直接呼ぶ。
 
-					<%%
-						global.filteredNodes = Object.values(rig.nodes).filter(
-							node => (
-								node.type === 'bone' &&
-								!variant.excluded_nodes.includes(node.uuid) &&
-								(	// Variant has a model override or a config override for this bone.
-									variant.models[node.uuid] !== undefined ||
+			function _apply {
+				# ARGS: {variant: string}
+				# bone_id 軸 × {cmd, cfg} 2 軸 の積を展開。 cmd = CustomModelData int、 cfg = display config NBT。
+				<%%
+					Object.values(rig.nodes)
+						.filter(n => BONE_TYPES.includes(n.type))
+						.forEach((node, i) => {
+							const cmdPath = `${project_storage.replace(':', '.')}:meta d.variants.$(variant).${i}.cmd`
+							emit(`$execute on passengers if entity @s[scores={${OBJECTIVES.BONE_ID(blueprint_id)}=${i}}] if data storage ${cmdPath} run data modify entity @s item.tag.CustomModelData set from storage ${cmdPath}`)
+							const cfgPath = `${project_storage.replace(':', '.')}:meta d.variants.$(variant).${i}.cfg`
+							emit(`$execute on passengers if entity @s[scores={${OBJECTIVES.BONE_ID(blueprint_id)}=${i}}] if data storage ${cfgPath} run data modify entity @s {} merge from storage ${cfgPath}`)
+						})
+				%%>
+				return 1
+			}
+
+			REPEAT (Object.values(rig.variants)) as variant {
+				dir <%variant.storage_name%> {
+					function apply {
+						debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+						# UX 維持の薄い wrapper。 internal dispatch は _apply_at_frame で wrapper バイパスする。
+						function <%blueprint_id%>/variants/_apply {variant: "<%variant.storage_name%>"}
+						return 1
+					}
+				}
+			}
+
+			function _apply_at_frame {
+				# ARGS: {name: string, condition: string}
+				# frame 単位 variant dispatch (apply_frame の variant 軸経路)。 wrapper をバイパスして
+				# 共通 _apply を直接呼ぶ (純正 2 段 dispatch → 1 段省略、 macro cache 1 段省略)。
+				# $(condition) は空文字でも `execute run function ...` で合法 (= function 直接呼びと等価)。
+				$execute $(condition)run function <%blueprint_id%>/variants/_apply {variant: "$(name)"}
+			}
+		} ELSE {
+			REPEAT (Object.values(rig.variants)) as variant {
+				dir <%variant.name%> {
+					function apply {
+						debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
+
+						<%%
+							global.filteredNodes = Object.values(rig.nodes).filter(
+								node => (
+									node.type === 'bone' &&
+									!variant.excluded_nodes.includes(node.uuid) &&
+									(	// Variant has a model override or a config override for this bone.
+										variant.models[node.uuid] !== undefined ||
+										node.configs.variants[variant.uuid] !== undefined
+									)
+								) || (
+									BONE_TYPES.includes(node.type) &&
+									!variant.excluded_nodes.includes(node.uuid) &&
+									// Variant has a config override for this node.
 									node.configs.variants[variant.uuid] !== undefined
 								)
-							) || (
-								BONE_TYPES.includes(node.type) &&
-								!variant.excluded_nodes.includes(node.uuid) &&
-								// Variant has a config override for this node.
-								node.configs.variants[variant.uuid] !== undefined
 							)
-						)
-					%%>
+						%%>
 
-					REPEAT (global.filteredNodes) as node {
-						execute \
-							on passengers \
-							if entity @s[tag=<%TAGS.PROJECT_NODE_NAMED(blueprint_id, node.storage_name)%>] \
-							at @s \
-						run \
-							block zzz/apply_to_node_<%node.storage_name%> {
-								IF (node.type === 'bone' && variant.models[node.uuid] !== undefined) {
-									# Special case for `animated_java:empty` model.
-									IF (variant.models[node.uuid].model === null) {
-										data modify entity @s item.tag.CustomModelData set value 1
-									} ELSE {
-										data modify entity @s item.tag.CustomModelData set value <%variant.models[node.uuid].custom_model_data%>
+						REPEAT (global.filteredNodes) as node {
+							execute \
+								on passengers \
+								if entity @s[tag=<%TAGS.PROJECT_NODE_NAMED(blueprint_id, node.storage_name)%>] \
+								at @s \
+							run \
+								block zzz/apply_to_node_<%node.storage_name%> {
+									IF (node.type === 'bone' && variant.models[node.uuid] !== undefined) {
+										# Special case for `animated_java:empty` model.
+										IF (variant.models[node.uuid].model === null) {
+											data modify entity @s item.tag.CustomModelData set value 1
+										} ELSE {
+											data modify entity @s item.tag.CustomModelData set value <%variant.models[node.uuid].custom_model_data%>
+										}
 									}
-								}
-								IF (node.configs.variants[variant.uuid]) {
-									<%%
-										global.config = DisplayEntityConfig.fromJSON(node.configs.variants[variant.uuid])
-									%%>
-									IF (!global.config.isDefault()) {
-										data merge entity @s <%global.config.toNBT(undefined, variant.is_default)%>
-									}
-									IF (global.config.onApplyFunction) {
+									IF (node.configs.variants[variant.uuid]) {
 										<%%
-											emit.mcb(global.config.onApplyFunction)
+											global.config = DisplayEntityConfig.fromJSON(node.configs.variants[variant.uuid])
 										%%>
+										IF (!global.config.isDefault()) {
+											data merge entity @s <%global.config.toNBT(undefined, variant.is_default)%>
+										}
+										IF (global.config.onApplyFunction) {
+											<%%
+												emit.mcb(global.config.onApplyFunction)
+											%%>
+										}
 									}
-								}
+							}
 						}
+						# Return success to allow this function to be used in function conditions.
+						return 1
 					}
-					# Return success to allow this function to be used in function conditions.
-					return 1
 				}
 			}
 		}
