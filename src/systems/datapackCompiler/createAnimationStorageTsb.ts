@@ -76,9 +76,10 @@ export async function createAnimationStorageTsb(
 		})
 	}
 
-	for (const anim of animations) {
+	for (const [animIndex, anim] of animations.entries()) {
 		const expandRefs = writeExpandFunctions(
 			anim,
+			animIndex,
 			idMap,
 			opts,
 			files,
@@ -125,6 +126,10 @@ export async function createAnimationStorageTsb(
 }
 
 function buildIdMap(rig: IRenderedRig): IdMap {
+	// Phase C 整合 : bone_id / locator_id は decimal int に統一 (`current_anim` scoreboard と同じ
+	// 表現を path key にも使う = scoreboard から取った int をマクロでそのまま流せる)。 base36 比で
+	// 27 bone なら平均 +0.6 文字 / 個、 全 cell の bone path 重複なし (`d.<anim>.bones.<id>` の `<id>`
+	// 部分のみ) のため path 長への影響は微小。 mcb の summon 末尾 set 行も同じ順序 (= index) を使う。
 	const bones: BoneIdEntry[] = []
 	const locators: BoneIdEntry[] = []
 	for (const node of Object.values(rig.nodes)) {
@@ -132,13 +137,13 @@ function buildIdMap(rig: IRenderedRig): IdMap {
 			bones.push({
 				uuid: node.uuid,
 				storageName: node.storage_name,
-				id: bones.length.toString(36),
+				id: bones.length.toString(),
 			})
 		} else if (node.type === 'locator') {
 			locators.push({
 				uuid: node.uuid,
 				storageName: node.storage_name,
-				id: locators.length.toString(36),
+				id: locators.length.toString(),
 			})
 		}
 	}
@@ -199,6 +204,7 @@ function buildCleanup(
 
 function writeExpandFunctions(
 	anim: IRenderedAnimation,
+	animIndex: number,
 	idMap: IdMap,
 	opts: CreateAnimationStorageTsbOptions,
 	files: Map<string, ExportedFile>,
@@ -209,13 +215,18 @@ function writeExpandFunctions(
 	type Item = { line: string }
 	const items: Item[] = []
 	const animStorageName = anim.storage_name
+	// Phase C : storage path 内の anim 識別子は `a_<int>` (decimal int 直接埋め込み)。 scoreboard
+	// `aj.<bp>.current_anim` の値 (int) からマクロで `$(anim_id)` に流すだけで path 組立が成立し、
+	// base36 変換層が不要。 mcfunction file path (= expand/<storage_name>/p<N>) は debug 用に
+	// storage_name を維持する。
+	const animPathKey = `a_${animIndex}`
 	const cellsPerNode = anim.duration
 
 	for (const b of idMap.bones) {
 		if (!(b.uuid in anim.modified_nodes)) continue
 		const framesObj = buildBoneFramesObj(b, anim, opts.quantizationDigits)
 		if (framesObj === null) continue
-		const line = `$data modify storage ${storageNs}:anim d.${animStorageName}.bones.${b.id}$(_) set value ${framesObj}`
+		const line = `$data modify storage ${storageNs}:anim d.${animPathKey}.bones.${b.id}$(_) set value ${framesObj}`
 		ensureLineWithinLimit(line, anim, b, opts.maxLineBytes)
 		items.push({ line })
 	}
@@ -223,7 +234,7 @@ function writeExpandFunctions(
 		if (!(l.uuid in anim.modified_nodes)) continue
 		const framesObj = buildLocatorFramesObj(l, anim, opts.quantizationDigits)
 		if (framesObj === null) continue
-		const line = `$data modify storage ${storageNs}:anim d.${animStorageName}.locators.${l.id}$(_) set value ${framesObj}`
+		const line = `$data modify storage ${storageNs}:anim d.${animPathKey}.locators.${l.id}$(_) set value ${framesObj}`
 		ensureLineWithinLimit(line, anim, l, opts.maxLineBytes)
 		items.push({ line })
 	}
@@ -248,7 +259,7 @@ function writeExpandFunctions(
 		const isLast = i === batches.length - 1
 		const body = batches[i].map(it => it.line).join('\n')
 		const completionMark = isLast
-			? `$data modify storage ${storageNs}:state d.loaded.${animStorageName}$(_) set value 1b`
+			? `$data modify storage ${storageNs}:state d.loaded.${animPathKey}$(_) set value 1b`
 			: ''
 		const content = [body, completionMark].filter(Boolean).join('\n') + '\n'
 		files.set(`${fnPathPrefix}/expand/${animStorageName}/p${i}.mcfunction`, {
@@ -375,7 +386,10 @@ function buildProjectVariantsExpand(
 	storageNs: string
 ): string | null {
 	const variantLines: string[] = []
-	for (const anim of animations) {
+	// Phase C : variant cells path key も anim cell と同じ `a_<int>` 形式に揃える
+	// (apply_frame の variant 軸 dispatch が `aj.<bp>:variants d.a_$(anim_id).$(frame)` で
+	// path 引くため)。
+	for (const [animIndex, anim] of animations.entries()) {
 		const parts: string[] = []
 		for (let i = 0; i < anim.frames.length; i++) {
 			const frame = anim.frames[i]
@@ -391,7 +405,7 @@ function buildProjectVariantsExpand(
 		}
 		if (parts.length === 0) continue
 		variantLines.push(
-			`$data modify storage ${storageNs}:variants d.${anim.storage_name}$(_) set value {${parts.join(',')}}`
+			`$data modify storage ${storageNs}:variants d.a_${animIndex}$(_) set value {${parts.join(',')}}`
 		)
 	}
 	if (variantLines.length === 0) return null
