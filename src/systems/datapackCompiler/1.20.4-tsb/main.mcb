@@ -17,7 +17,9 @@ function on_load {
 		<%animationStorage.join('\n')%>
 	}
 
-	IF (has_animations) {
+	IF (has_animations && !tsb_optimized_export) {
+		# Phase C : tsb_optimized_export 時は anim 単位 frame objective を作らない (代わりに bp 単位
+		# FRAME_BP 1 個に集約、 後段の `IF (tsb_optimized_export && has_animations)` ブロックで追加)。
 		<%%
 			animations.forEach(animation => {
 				emit(`scoreboard objectives add ${OBJECTIVES.FRAME(animation.storage_name)} dummy`)
@@ -112,7 +114,7 @@ function on_load {
 						bonePartsList.push(`"${i}":{${parts.join(',')}}`)
 					})
 					if (bonePartsList.length === 0) continue
-					variantParts.push(`${variant.storage_name}:{${bonePartsList.join(',')}}`)
+					variantParts.push(`${variant.name}:{${bonePartsList.join(',')}}`)
 				}
 				if (variantParts.length > 0) {
 					emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.variants set value {${variantParts.join(',')}}`)
@@ -135,11 +137,23 @@ function on_load {
 
 IF (has_animations) {
 	function remove_animation_objectives {
-		<%%
-			animations.forEach(animation => {
-				emit(`scoreboard objectives remove ${OBJECTIVES.FRAME(animation.storage_name)}`)
-			})
-		%%>
+		IF (!tsb_optimized_export) {
+			<%%
+				animations.forEach(animation => {
+					emit(`scoreboard objectives remove ${OBJECTIVES.FRAME(animation.storage_name)}`)
+				})
+			%%>
+		} ELSE {
+			# Phase C : on_load で追加した bp 単位 objective 6 個を cleanup 時に削除して残骸を残さない。
+			# グローバル共有 objectives (`aj.i` / `aj.id` / `aj.is_rig_loaded` / `aj.tween_duration`) は
+			# 他 blueprint と共用のため対象外。
+			scoreboard objectives remove <%OBJECTIVES.DUR(blueprint_id)%>
+			scoreboard objectives remove <%OBJECTIVES.TP_DUR(blueprint_id)%>
+			scoreboard objectives remove <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%>
+			scoreboard objectives remove <%OBJECTIVES.FRAME_BP(blueprint_id)%>
+			scoreboard objectives remove <%OBJECTIVES.BONE_ID(blueprint_id)%>
+			scoreboard objectives remove <%OBJECTIVES.LOCATOR_ID(blueprint_id)%>
+		}
 		# TSB Optimized Export 配布ビルドでは UNINSTALL tellraw を抑制
 		# (Blueprint Settings の `Silent Uninstall` チェックボックス、 default true)。
 		# false にすると純正 AJ と同じ挙動 (tellraw でアンインストール完了をブロードキャスト)。
@@ -534,10 +548,13 @@ IF (has_animations) {
 				# ARGS: {anim_id: int, frame: int, bone_id: int}
 				# bone passenger コンテキスト。 Phase A の 7/10/14 floats 純配列を Global API で
 				# transformation compound に整形して entity に代入し、 interpolation_duration を反映。
+				# 使用後の d.tmp (= d.tmp.x + d.tmp.transform) は data remove でリセットして
+				# 残骸を残さない (永続 storage に古い transform が残ると将来の参照で事故源になる)。
 				$data modify storage animated_java:global d.tmp.x set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).bones.$(bone_id).$(frame)
 				function animated_java:global/transform_from_array
 				data modify entity @s transformation set from storage animated_java:global d.tmp.transform
 				execute store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
+				data remove storage animated_java:global d.tmp
 			}
 
 			function _apply_locator {
@@ -1356,11 +1373,11 @@ IF (Object.keys(rig.variants).length > 1) {
 			}
 
 			REPEAT (Object.values(rig.variants)) as variant {
-				dir <%variant.storage_name%> {
+				dir <%variant.name%> {
 					function apply {
 						debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
 						# UX 維持の薄い wrapper。 internal dispatch は _apply_at_frame で wrapper バイパスする。
-						function <%blueprint_id%>/variants/_apply {variant: "<%variant.storage_name%>"}
+						function <%blueprint_id%>/variants/_apply {variant: "<%variant.name%>"}
 						return 1
 					}
 				}
