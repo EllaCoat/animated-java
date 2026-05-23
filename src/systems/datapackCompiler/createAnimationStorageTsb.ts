@@ -21,6 +21,7 @@ export interface CreateAnimationStorageTsbOptions {
 	quantizationDigits: number
 	cellsPerTick: number
 	maxLineBytes: number
+	loadDebugLog: boolean
 }
 
 export interface CreateAnimationStorageTsbResult {
@@ -70,7 +71,13 @@ export async function createAnimationStorageTsb(
 	//   - 1 anim = 1 行 set value (variant cells は frame_idx 単位で疎、 N 行並べても MAX_LINE_BYTES 内)
 	//   - 段階展開せず 1 tick で flush できる軽量データ → expand というより「メタデータ流し込み」
 	//   - loaded フラグも project 単位 boolean (`d.loaded_variants`) に縮め、 force_load の guard を簡素化
-	const variantsContent = buildProjectVariantsExpand(animations, rig, storageNs)
+	const variantsContent = buildProjectVariantsExpand(
+		animations,
+		rig,
+		storageNs,
+		opts.blueprintId,
+		opts.loadDebugLog
+	)
 	const variantsExpandRef =
 		variantsContent !== null ? `${fnRef}/expand_variants` : null
 	if (variantsContent !== null) {
@@ -115,7 +122,7 @@ export async function createAnimationStorageTsb(
 			content: buildRotateActive(pri, opts.blueprintId),
 		})
 		files.set(`${fnPathPrefix}/load/remove_from_priority/${pri}.mcfunction`, {
-			content: buildRemoveFromPriority(pri, opts.blueprintId),
+			content: buildRemoveFromPriority(pri, opts.blueprintId, opts.loadDebugLog),
 		})
 		files.set(`${fnPathPrefix}/load/pop/${pri}.mcfunction`, {
 			content: buildPop(pri, storageNs, fnRef),
@@ -304,10 +311,18 @@ function writeExpandFunctions(
 	for (let i = 0; i < batches.length; i++) {
 		const isLast = i === batches.length - 1
 		const body = batches[i].map(it => it.line).join('\n')
-		const completionMark = isLast
-			? `$data modify storage ${storageNs}:state d.loaded.${animPathKey}$(_) set value 1b`
-			: ''
-		const content = [body, completionMark].filter(Boolean).join('\n') + '\n'
+		const completionLines: string[] = []
+		if (isLast) {
+			completionLines.push(
+				`$data modify storage ${storageNs}:state d.loaded.${animPathKey}$(_) set value 1b`
+			)
+			if (opts.loadDebugLog) {
+				// Server-side staged-load progress log (tsb_load_debug_log = true)。
+				// 各 anim の最終 batch (= loaded フラグ立てるタイミング) で発火。
+				completionLines.push(buildLoadLogTellraw(opts.blueprintId, `anim ${animStorageName} (id=${animIndex}) loaded`))
+			}
+		}
+		const content = [body, ...completionLines].filter(Boolean).join('\n') + '\n'
 		files.set(`${fnPathPrefix}/expand/${animStorageName}/p${i}.mcfunction`, {
 			content,
 		})
@@ -426,10 +441,20 @@ function buildForceLoad(
 	return lines.join('\n') + '\n'
 }
 
+function buildLoadLogTellraw(blueprintId: string, message: string): string {
+	// Phase B-1.5 staged-load progress log。 tsb_load_debug_log フラグで有効化、 サーバ側でのみ tellraw 発火。
+	// 各メッセージ : `[TSB] <bp>: <message>` (gray prefix + aqua bp + green message)。
+	const safeBp = escapeNbtString(blueprintId)
+	const safeMessage = escapeNbtString(message)
+	return `tellraw @a [{"text":"[TSB] ","color":"gray"},{"text":"${safeBp}","color":"aqua"},{"text":": ${safeMessage}","color":"green"}]`
+}
+
 function buildProjectVariantsExpand(
 	animations: IRenderedAnimation[],
 	rig: IRenderedRig,
-	storageNs: string
+	storageNs: string,
+	blueprintId: string,
+	loadDebugLog: boolean
 ): string | null {
 	const variantLines: string[] = []
 	// Phase C : variant cells path key も anim cell と同じ `a_<int>` 形式に揃える
@@ -460,6 +485,9 @@ function buildProjectVariantsExpand(
 	variantLines.push(
 		`$data modify storage ${storageNs}:state d.loaded_variants$(_) set value 1b`
 	)
+	if (loadDebugLog) {
+		variantLines.push(buildLoadLogTellraw(blueprintId, 'variants loaded'))
+	}
 	return variantLines.join('\n') + '\n'
 }
 
@@ -537,17 +565,26 @@ function buildRotateActive(priority: Priority, bpId: string): string {
 	)
 }
 
-function buildRemoveFromPriority(priority: Priority, bpId: string): string {
+function buildRemoveFromPriority(
+	priority: Priority,
+	bpId: string,
+	loadDebugLog: boolean
+): string {
 	const bpIdLit = `"${escapeNbtString(bpId)}"`
-	return (
-		[
-			`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${priority}[0]`,
-			`data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}.${priority}`,
-			// 全 3 priority の queue_order が空 = 全 bp の全 priority work 消化 → has_work クリア
-			// (= load_tick はアイドルに戻り、 次 reload まで 1 命令 return 状態)。
-			`execute unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.immediate[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.high[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.low[0] run data remove storage ${GLOBAL_STORAGE_NS}:state d.has_work`,
-		].join('\n') + '\n'
-	)
+	const allEmptyCheck = `unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.immediate[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.high[0] unless data storage ${GLOBAL_STORAGE_NS}:state d.queue_order.low[0]`
+	const lines = [
+		`data remove storage ${GLOBAL_STORAGE_NS}:state d.queue_order.${priority}[0]`,
+		`data remove storage ${GLOBAL_STORAGE_NS}:state d.active.${bpIdLit}.${priority}`,
+		// 全 3 priority の queue_order が空 = 全 bp の全 priority work 消化 → has_work クリア
+		// (= load_tick はアイドルに戻り、 次 reload まで 1 命令 return 状態)。
+		`execute ${allEmptyCheck} run data remove storage ${GLOBAL_STORAGE_NS}:state d.has_work`,
+	]
+	if (loadDebugLog) {
+		// 全 work 完了タイミング = has_work クリアと同条件で発火。 priority ごとに同条件チェックが
+		// 走るが、 実発火するのは最後の remove (全 priority queue 空になった瞬間) の 1 回のみ。
+		lines.push(`execute ${allEmptyCheck} run ${buildLoadLogTellraw(bpId, 'all anims loaded')}`)
+	}
+	return lines.join('\n') + '\n'
 }
 
 function buildPop(

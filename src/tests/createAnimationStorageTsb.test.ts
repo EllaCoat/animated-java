@@ -220,6 +220,7 @@ describe('createAnimationStorageTsb - demo_boss minimal example', () => {
 				quantizationDigits: 5,
 				cellsPerTick: 1000,
 				maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 			}
 		)
 
@@ -387,6 +388,7 @@ describe('createAnimationStorageTsb - batch splitting (cells_per_tick)', () => {
 			quantizationDigits: 5,
 			cellsPerTick: 10,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 
 		const paths = [...result.files.keys()]
@@ -459,6 +461,7 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		const cleanup = result.files.get('data/aj/functions/demo/cleanup.mcfunction')!.content as string
 		for (const pri of ['immediate', 'high', 'low'] as const) {
@@ -481,6 +484,7 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		const cleanup = result.files.get('data/aj/functions/empty/cleanup.mcfunction')!.content as string
 		expect(cleanup).toContain(
@@ -498,6 +502,7 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		const initQueue = result.files.get(
 			'data/aj/functions/empty/load/init_queue.mcfunction'
@@ -513,12 +518,14 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		const bp2 = await createAnimationStorageTsb(rig, [anim], {
 			blueprintId: 'aj:boss_b',
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		const iq1 = bp1.files.get('data/aj/functions/boss_a/load/init_queue.mcfunction')!.content as string
 		const iq2 = bp2.files.get('data/aj/functions/boss_b/load/init_queue.mcfunction')!.content as string
@@ -536,6 +543,7 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		for (const pri of ['immediate', 'high', 'low'] as const) {
 			const step = result.files.get(`data/aj/functions/demo/load/step/${pri}.mcfunction`)!
@@ -556,6 +564,7 @@ describe('createAnimationStorageTsb - priority-aware global round-robin (Phase B
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 		for (const pri of ['immediate', 'high', 'low'] as const) {
 			const removePri = result.files.get(
@@ -605,6 +614,7 @@ describe('createAnimationStorageTsb - float quantization', () => {
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 
 		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content
@@ -621,6 +631,7 @@ describe('createAnimationStorageTsb - float quantization', () => {
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 
 		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content
@@ -636,6 +647,7 @@ describe('createAnimationStorageTsb - float quantization', () => {
 			quantizationDigits: 5,
 			cellsPerTick: 1000,
 			maxLineBytes: 1_000_000,
+				loadDebugLog: false,
 		})
 
 		const content = result.files.get('data/aj/functions/demo/expand/q/p0.mcfunction')!.content

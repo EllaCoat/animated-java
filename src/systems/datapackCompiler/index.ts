@@ -590,6 +590,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 							quantizationDigits: aj.tsb_quantization_digits_default,
 							cellsPerTick: aj.tsb_cells_per_tick,
 							maxLineBytes: aj.tsb_max_line_bytes,
+							loadDebugLog: aj.tsb_load_debug_log,
 						})
 						for (const [path, file] of tsbResult.files) {
 							versionedFiles.set(path, file)
@@ -603,6 +604,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 		tsb_cells_per_tick: aj.tsb_cells_per_tick,
 		tsb_max_line_bytes: aj.tsb_max_line_bytes,
 		tsb_silent_uninstall: aj.tsb_silent_uninstall,
+		tsb_load_debug_log: aj.tsb_load_debug_log,
 		rig_hash: rigHash,
 		animation_hash: animationHash,
 		boundingBox: aj.render_box,
