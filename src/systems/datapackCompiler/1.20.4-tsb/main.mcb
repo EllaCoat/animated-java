@@ -583,6 +583,41 @@ IF (has_animations) {
 				tag @s remove <%TAGS.ANIMATION_PLAYING(blueprint_id, animation.storage_name)%>
 			}
 		}
+
+		IF (tsb_optimized_export) {
+			# Phase C 案 R : アニメ別 N コピーを廃止して共通 apply 関数で集約。 passenger コンテキストで
+			# 呼ばれ、 bone_id / locator_id score (sentinel -1 でない方) で軸を選択。 path 不在
+			# (このアニメで動かない bone/locator) は `if data storage` ガードで弾く。
+
+			function _apply_one {
+				# ARGS: {anim_id: int, frame: int, bone_id: int, locator_id: int}
+				# passenger コンテキスト。 score check + path 存在チェックで該当 entity のみ apply。
+				$execute if score @s <%OBJECTIVES.BONE_ID(blueprint_id)%> matches 0.. if data storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).bones.$(bone_id).$(frame) run function <%blueprint_id%>/animations/_apply_bone {anim_id: $(anim_id), frame: $(frame), bone_id: $(bone_id)}
+				$execute if score @s <%OBJECTIVES.LOCATOR_ID(blueprint_id)%> matches 0.. if data storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame) run function <%blueprint_id%>/animations/_apply_locator {anim_id: $(anim_id), frame: $(frame), locator_id: $(locator_id)}
+			}
+
+			function _apply_bone {
+				# ARGS: {anim_id: int, frame: int, bone_id: int}
+				# bone passenger コンテキスト。 Phase A の 7/10/14 floats 純配列を Global API で
+				# transformation compound に整形して entity に代入し、 interpolation_duration を反映。
+				$data modify storage animated_java:global d.tmp.x set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).bones.$(bone_id).$(frame)
+				function animated_java:global/transform_from_array
+				data modify entity @s transformation set from storage animated_java:global d.tmp.transform
+				execute store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
+			}
+
+			function _apply_locator {
+				# ARGS: {anim_id: int, frame: int, locator_id: int}
+				# locator passenger コンテキスト。 Phase A の [5f] 固定配列 [px, py, pz, rot[0]=pitch, rot[1]=yaw] を
+				# entity の Pos[0..2] / Rotation[0..1] に個別代入。 Rotation[0]=yaw, Rotation[1]=pitch のため
+				# array index [4]→Rotation[0], [3]→Rotation[1] でクロス代入する。
+				$data modify entity @s Pos[0] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[0]
+				$data modify entity @s Pos[1] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[1]
+				$data modify entity @s Pos[2] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[2]
+				$data modify entity @s Rotation[0] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[4]
+				$data modify entity @s Rotation[1] set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).locators.$(locator_id).$(frame)[3]
+			}
+		}
 	}
 }
 
