@@ -311,6 +311,9 @@ IF (has_animations) {
 				# ARGS: {anim_id: int}
 				# アニメ再生開始。 純正の play (line 199-209) 集約版。 frame=0 で transforms_only 経由で
 				# 初期 pose を反映してから current_anim を set、 next tick から _zzz_on_tick が回る。
+				# interpolation_duration はここで passenger に store する (Blueprint Setting 変更時の
+				# 動的反映ポイント、 _apply_bone から移動)。 tween は別途 tween_duration で上書き、
+				# _zzz_on_tick が tween 終了時に通常値に戻すので整合性は保たれる。
 				debug assert executed_as_root_entity <%TAGS.PROJECT_ROOT(blueprint_id)%>
 
 				$scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> $(anim_id)
@@ -318,6 +321,7 @@ IF (has_animations) {
 				tag @s add <%TAGS.TRANSFORMS_ONLY()%>
 				$execute at @s run function <%blueprint_id%>/animations/_zzz_set_frame {anim_id: $(anim_id), frame: 0}
 				tag @s remove <%TAGS.TRANSFORMS_ONLY()%>
+				execute on passengers store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
 			}
 
 			function _stop {
@@ -547,13 +551,14 @@ IF (has_animations) {
 			function _apply_bone {
 				# ARGS: {anim_id: int, frame: int, bone_id: int}
 				# bone passenger コンテキスト。 Phase A の 7/10/14 floats 純配列を Global API で
-				# transformation compound に整形して entity に代入し、 interpolation_duration を反映。
+				# transformation compound に整形して entity に代入する。
 				# 使用後の d.tmp (= d.tmp.x + d.tmp.transform) は data remove でリセットして
 				# 残骸を残さない (永続 storage に古い transform が残ると将来の参照で事故源になる)。
+				# interpolation_duration は summon 末尾 + _play / _tween / _zzz_on_tick で必要時のみ
+				# store する形にして、 毎 tick × passenger 数の冗長 store を排除した。
 				$data modify storage animated_java:global d.tmp.x set from storage <%project_storage.replace(':', '.')%>:anim d.a_$(anim_id).bones.$(bone_id).$(frame)
 				function animated_java:global/transform_from_array
 				data modify entity @s transformation set from storage animated_java:global d.tmp.transform
-				execute store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
 				data remove storage animated_java:global d.tmp
 			}
 
@@ -923,6 +928,11 @@ function summon {
 						emit(`execute on passengers if entity @s[tag=${TAGS.PROJECT_NODE_NAMED(blueprint_id, node.storage_name)}] run scoreboard players set @s ${OBJECTIVES.LOCATOR_ID(blueprint_id)} ${i}`)
 					})
 			%%>
+
+			# interpolation_duration の初期化 (Phase C : _apply_bone の毎 tick store を廃止、
+			# 代わりに summon 直後 + _play / _tween / _zzz_on_tick の必要時のみ store)。
+			# Blueprint Setting 変更時の動的反映は reload → on_load 再走 → 次回 _play で反映。
+			execute on passengers store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
 		}
 
 		# Remove the NEW tag from the root entity, and it's passengers.
