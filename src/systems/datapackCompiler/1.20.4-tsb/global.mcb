@@ -53,6 +53,56 @@ dir global {
 				$function $(id)/load/step/low
 			}
 		}
+
+		# Phase C 案 R : Global API。 anim cell の 7/10/14 floats 純配列を transformation compound
+		# (translation / left_rotation / right_rotation / scale) に整形する全 bp 共有 API。 マクロ展開なし
+		# = cache 不要、 全 bp 共有可能。 入力 path / 出力 path とも `animated_java:global d.tmp` に固定。
+		function transform_from_array {
+			# 入力 : animated_java:global d.tmp.x = [N floats] (N=7/10/14)
+			# 出力 : animated_java:global d.tmp.transform = { translation, left_rotation, right_rotation, scale }
+
+			# 各 list を空で初期化 (前回呼び出しの残骸を捨てる、 append from で要素追加)。
+			data modify storage animated_java:global d.tmp.transform.translation set value []
+			data modify storage animated_java:global d.tmp.transform.left_rotation set value []
+
+			# translation (index 0..2 = pos, 全 cell 共通)
+			data modify storage animated_java:global d.tmp.transform.translation append from storage animated_java:global d.tmp.x[0]
+			data modify storage animated_java:global d.tmp.transform.translation append from storage animated_java:global d.tmp.x[1]
+			data modify storage animated_java:global d.tmp.transform.translation append from storage animated_java:global d.tmp.x[2]
+
+			# left_rotation (index 3..6 = quaternion qx/qy/qz/qw、 全 cell 共通)
+			data modify storage animated_java:global d.tmp.transform.left_rotation append from storage animated_java:global d.tmp.x[3]
+			data modify storage animated_java:global d.tmp.transform.left_rotation append from storage animated_java:global d.tmp.x[4]
+			data modify storage animated_java:global d.tmp.transform.left_rotation append from storage animated_java:global d.tmp.x[5]
+			data modify storage animated_java:global d.tmp.transform.left_rotation append from storage animated_java:global d.tmp.x[6]
+
+			# 配列長判定で scale / right_rotation を分岐 (7 = identity, 10 = uniform, 14 = non-uniform)
+			execute unless data storage animated_java:global d.tmp.x[7] run block identity {
+				# 7 floats : scale = identity [1,1,1], right_rotation = identity [0,0,0,1]
+				data modify storage animated_java:global d.tmp.transform.scale set value [1f, 1f, 1f]
+				data modify storage animated_java:global d.tmp.transform.right_rotation set value [0f, 0f, 0f, 1f]
+			}
+			execute if data storage animated_java:global d.tmp.x[7] unless data storage animated_java:global d.tmp.x[10] run block uniform {
+				# 10 floats : scale = x[7..9] (uniform scale)、 right_rotation = identity
+				data modify storage animated_java:global d.tmp.transform.scale set value []
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[7]
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[8]
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[9]
+				data modify storage animated_java:global d.tmp.transform.right_rotation set value [0f, 0f, 0f, 1f]
+			}
+			execute if data storage animated_java:global d.tmp.x[10] run block non_uniform {
+				# 14 floats : right_rotation = x[7..10] (SVD R2 quaternion)、 scale = x[11..13]
+				data modify storage animated_java:global d.tmp.transform.right_rotation set value []
+				data modify storage animated_java:global d.tmp.transform.right_rotation append from storage animated_java:global d.tmp.x[7]
+				data modify storage animated_java:global d.tmp.transform.right_rotation append from storage animated_java:global d.tmp.x[8]
+				data modify storage animated_java:global d.tmp.transform.right_rotation append from storage animated_java:global d.tmp.x[9]
+				data modify storage animated_java:global d.tmp.transform.right_rotation append from storage animated_java:global d.tmp.x[10]
+				data modify storage animated_java:global d.tmp.transform.scale set value []
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[11]
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[12]
+				data modify storage animated_java:global d.tmp.transform.scale append from storage animated_java:global d.tmp.x[13]
+			}
+		}
 	}
 
 	tag functions on_load {
