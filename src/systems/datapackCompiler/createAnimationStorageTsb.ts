@@ -321,10 +321,7 @@ function writeExpandFunctions(
 			if (opts.loadDebugLog) {
 				// Server-side staged-load progress log (tsb_load_debug_log = true)。
 				// 各 anim の最終 batch (= loaded フラグ立てるタイミング) で発火。
-				completionLines.push(
-					buildLoadLogTellraw(opts.blueprintId, `anim ${animStorageName} (id=${animIndex}) loaded`),
-					buildLoadLogMe(opts.blueprintId, `anim ${animStorageName} (id=${animIndex}) loaded`)
-				)
+				completionLines.push(buildLoadLogTellraw(opts.blueprintId, `anim ${animStorageName} (id=${animIndex}) loaded`))
 			}
 		}
 		const content = [body, ...completionLines].filter(Boolean).join('\n') + '\n'
@@ -447,18 +444,11 @@ function buildForceLoad(
 }
 
 function buildLoadLogTellraw(blueprintId: string, message: string): string {
-	// Phase B-1.5 staged-load progress log (chat 側、 カラフル表示)。
-	// `[TSB] <bp>: <message>` (gray prefix + aqua bp + green message)。
+	// Phase B-1.5 staged-load progress log。 tsb_load_debug_log フラグで有効化、 サーバ側でのみ tellraw 発火。
+	// 各メッセージ : `[TSB] <bp>: <message>` (gray prefix + aqua bp + green message)。
 	const safeBp = escapeNbtString(blueprintId)
 	const safeMessage = escapeNbtString(message)
 	return `tellraw @a [{"text":"[TSB] ","color":"gray"},{"text":"${safeBp}","color":"aqua"},{"text":": ${safeMessage}","color":"green"}]`
-}
-
-function buildLoadLogMe(blueprintId: string, message: string): string {
-	// Phase B-1.5 staged-load progress log (server log + Monitor grep 用)。
-	// tellraw @a は console (= server log) に出ないため、 me で `* Server [TSB] <bp>: <message>`
-	// 形式 を console + chat 両方に出す。 開発検証 (= tsb_load_debug_log: true) 時のみ発火。
-	return `me [TSB] ${blueprintId}: ${message}`
 }
 
 function buildProjectVariantsExpand(
@@ -498,10 +488,7 @@ function buildProjectVariantsExpand(
 		`$data modify storage ${storageNs}:state d.loaded_variants$(_) set value 1b`
 	)
 	if (loadDebugLog) {
-		variantLines.push(
-			buildLoadLogTellraw(blueprintId, 'variants loaded'),
-			buildLoadLogMe(blueprintId, 'variants loaded')
-		)
+		variantLines.push(buildLoadLogTellraw(blueprintId, 'variants loaded'))
 	}
 	return variantLines.join('\n') + '\n'
 }
@@ -597,10 +584,7 @@ function buildRemoveFromPriority(
 	if (loadDebugLog) {
 		// 全 work 完了タイミング = has_work クリアと同条件で発火。 priority ごとに同条件チェックが
 		// 走るが、 実発火するのは最後の remove (全 priority queue 空になった瞬間) の 1 回のみ。
-		lines.push(
-			`execute ${allEmptyCheck} run ${buildLoadLogTellraw(bpId, 'all anims loaded')}`,
-			`execute ${allEmptyCheck} run ${buildLoadLogMe(bpId, 'all anims loaded')}`
-		)
+		lines.push(`execute ${allEmptyCheck} run ${buildLoadLogTellraw(bpId, 'all anims loaded')}`)
 	}
 	return lines.join('\n') + '\n'
 }
