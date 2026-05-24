@@ -56,11 +56,16 @@ async function generateRootEntityPassengers(version: string, rig: IRenderedRig) 
 		passenger.set('Tags', tags)
 
 		if (BONE_TYPES.includes(node.type)) {
+			// AJ defensive : blueprint json に interpolation_duration / teleportation_duration が
+			// 不在のとき (= UI で値変更後 dialog を閉じずに export → onDestroy で save されない、
+			// もしくは古い blueprint format に key 自体無い) `Project.animated_java.<key>` が
+			// undefined になり、 `NbtInt(undefined)` の内部 toFixed で例外。 settings.ts の default
+			// 値 (= interpolation_duration: 1, teleportation_duration: 1) を fallback で適用する。
 			passenger
 				.set('height', new NbtFloat(aj.render_box[1]))
 				.set('width', new NbtFloat(aj.render_box[0]))
 				.set('teleport_duration', new NbtInt(0))
-				.set('interpolation_duration', new NbtInt(aj.interpolation_duration))
+				.set('interpolation_duration', new NbtInt(aj.interpolation_duration ?? 1))
 				.set(
 					'transformation',
 					new NbtCompound()
@@ -564,8 +569,11 @@ const dataPackCompiler: DataPackCompiler = async ({
 	const variables = {
 		relativePathToSrc,
 		blueprint_id: aj.blueprint_id,
-		interpolation_duration: aj.interpolation_duration,
-		teleportation_duration: aj.teleportation_duration,
+		// AJ defensive : blueprint json に key 不在 / UI save 漏れで undefined のまま template 展開
+		// されると mcfunction で `set value undefined` 等で parse 壊れる。 settings.ts default
+		// (= interpolation_duration: 1, teleportation_duration: 1) を fallback で適用する。
+		interpolation_duration: aj.interpolation_duration ?? 1,
+		teleportation_duration: aj.teleportation_duration ?? 1,
 		display_item: aj.display_item,
 		rig,
 		animations,
