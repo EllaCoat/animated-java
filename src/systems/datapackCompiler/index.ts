@@ -56,16 +56,16 @@ async function generateRootEntityPassengers(version: string, rig: IRenderedRig) 
 		passenger.set('Tags', tags)
 
 		if (BONE_TYPES.includes(node.type)) {
-			// AJ defensive : blueprint json に interpolation_duration / teleportation_duration が
-			// 不在のとき (= UI で値変更後 dialog を閉じずに export → onDestroy で save されない、
-			// もしくは古い blueprint format に key 自体無い) `Project.animated_java.<key>` が
-			// undefined になり、 `NbtInt(undefined)` の内部 toFixed で例外。 settings.ts の default
-			// 値 (= interpolation_duration: 1, teleportation_duration: 1) を fallback で適用する。
+			// AJ defensive : 純正 AJ の NumberSlider component が値を **string で保存** するバグ
+			// (= 例 \`interpolation_duration: "2"\`) があり、 `?? 1` だけだと string truthy で
+			// fallback 効かず `NbtInt("2")` の内部 toFixed で例外。 さらに blueprint json に
+			// key 不在 (= UI dialog onDestroy save 漏れ) の undefined ケースもあるため、
+			// `Number(... ?? 1) || 1` で coercion + NaN/0/空文字 fallback を組み合わせる。
 			passenger
 				.set('height', new NbtFloat(aj.render_box[1]))
 				.set('width', new NbtFloat(aj.render_box[0]))
 				.set('teleport_duration', new NbtInt(0))
-				.set('interpolation_duration', new NbtInt(aj.interpolation_duration ?? 1))
+				.set('interpolation_duration', new NbtInt(Number(aj.interpolation_duration ?? 1) || 1))
 				.set(
 					'transformation',
 					new NbtCompound()
@@ -569,11 +569,12 @@ const dataPackCompiler: DataPackCompiler = async ({
 	const variables = {
 		relativePathToSrc,
 		blueprint_id: aj.blueprint_id,
-		// AJ defensive : blueprint json に key 不在 / UI save 漏れで undefined のまま template 展開
-		// されると mcfunction で `set value undefined` 等で parse 壊れる。 settings.ts default
-		// (= interpolation_duration: 1, teleportation_duration: 1) を fallback で適用する。
-		interpolation_duration: aj.interpolation_duration ?? 1,
-		teleportation_duration: aj.teleportation_duration ?? 1,
+		// AJ defensive : 純正 AJ の NumberSlider component が値を **string で保存** するため
+		// (= 例 \`interpolation_duration: "2"\`)、 number coercion + NaN/0/空文字 fallback を
+		// 組み合わせる。 mcfunction template で `set value <val>` 展開時に number でないと
+		// parse 壊れるため必須。
+		interpolation_duration: Number(aj.interpolation_duration ?? 1) || 1,
+		teleportation_duration: Number(aj.teleportation_duration ?? 1) || 1,
 		display_item: aj.display_item,
 		rig,
 		animations,
