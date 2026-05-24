@@ -411,7 +411,9 @@ IF (has_animations) {
 			# アニメ別 wrapper (UX 維持)。 各 1 行マクロで共通実装に anim_id を埋め込んで dispatch する。
 			# next_frame / play / stop / pause / resume は引数なし (anim_id 固定埋め込み)、
 			# set_frame / apply_frame / tween は frame / duration / to_frame を macro で受け流す。
-			REPEAT (animations.entries()) as animIndex, animation {
+			# Array.from で eager array 化 : mc-build の REPEAT に Array Iterator を渡すと silent
+			# 0-loop になる挙動を回避 (`animations.entries()` 単独だと wrapper が一切生成されない)。
+			REPEAT (Array.from(animations.entries())) as animIndex, animation {
 				dir <%animation.storage_name%> {
 					function play {
 						function <%blueprint_id%>/animations/_play {anim_id: <%animIndex%>}
@@ -449,7 +451,8 @@ IF (has_animations) {
 			# locator function keyframe / variant 切替 / root function を最終 frame の状態で実行する。
 			# 最終 frame の transformation 適用は cell から取れるため _lfx では行わない (frame=-1 の次 tick
 			# で _zzz_apply_frame が frame=0 を apply、 _lfx 内では function keyframe 系のみ発火させる)。
-			REPEAT (animations.entries()) as animIndex, animation {
+			# Array.from で eager array 化 : 上 (wrapper) と同じ理由で Iterator のままだと silent 0-loop。
+			REPEAT (Array.from(animations.entries())) as animIndex, animation {
 				<%%
 					const lastFrame = animation.frames[animation.frames.length - 1]
 					const modifiedEffectNodes = lastFrame
