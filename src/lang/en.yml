@@ -716,6 +716,21 @@ animated_java:
           The number of ticks to wait before restarting the animation when in Loop mode.
 
           E.g. A value of 20 will cause the animation to wait 1 second before restarting.
+      tsb_priority:
+        title: TSB Load Priority
+        description: |-
+          [Markdown]
+          (TSB Optimized Export only) Per-animation load priority for the global on_load queue.
+
+          - **Immediate**: Loaded together with variants right after on_load, blocks no further work.
+          - **High**: Loaded before low-priority animations across all blueprints.
+          - **Low**: Default. Loaded last, ideal for animations that aren't played immediately.
+
+          Priority order across blueprints is `immediate` → `high` → `low`, round-robin within the same priority.
+        options:
+          immediate: Immediate
+          high: High
+          low: Low
       bone_lists:
         description: |-
           Specify which nodes the animation should affect.
@@ -832,6 +847,7 @@ animated_java:
   animation:
     excluded_nodes: Excluded Nodes
     invert_excluded_nodes: Invert Excluded Nodes
+    tsb_priority: TSB Load Priority
 
   effect_animator:
     timeline:

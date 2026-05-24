@@ -65,7 +65,7 @@ export async function createAnimationStorageTsb(
 		content: buildCleanup(storageNs, opts.blueprintId, animations, fnRef),
 	})
 
-	const expandRefsByAnim: { anim: string; refs: string[] }[] = []
+	const expandRefsByAnim: { anim: string; refs: string[]; priority: Priority }[] = []
 
 	// variant データは anim 単位ではなく project 単位の単一関数に集約する :
 	//   - 1 anim = 1 行 set value (variant cells は frame_idx 単位で疎、 N 行並べても MAX_LINE_BYTES 内)
@@ -97,7 +97,9 @@ export async function createAnimationStorageTsb(
 			fnRef,
 			storageNs
 		)
-		expandRefsByAnim.push({ anim: anim.storage_name, refs: expandRefs })
+		// Phase B-1.6 : Animation properties UI で per-anim 指定可能。 未設定なら low (Phase B-1 暫定挙動踏襲)。
+		const priority: Priority = anim.tsb_priority ?? 'low'
+		expandRefsByAnim.push({ anim: anim.storage_name, refs: expandRefs, priority })
 
 		// force_load 同期経路 : variant 未ロード時のみ project 全 variant を同期展開してから
 		// bone cells を展開する。 variants が apply_frame の前提条件 (variant 切替 storage 参照) のため。
@@ -492,18 +494,18 @@ function buildProjectVariantsExpand(
 }
 
 function buildInitQueue(
-	expandRefsByAnim: { anim: string; refs: string[] }[],
+	expandRefsByAnim: { anim: string; refs: string[]; priority: Priority }[],
 	variantsExpandRef: string | null,
 	storageNs: string,
 	bpId: string
 ): string {
 	const buckets: Record<Priority, string[]> = { immediate: [], high: [], low: [] }
-	// Phase B-1 暫定 : priority UI 未実装のため、 bone expand は全 anim 分を low に積む。
-	// Phase B-1.6 (UI 拡張) で immediate / high への振り分けを導入予定。
-	// variant は apply_frame の前提条件 (variant 切替 storage 参照) のため immediate 固定 :
+	// Phase B-1.6 : Animation properties UI の `tsb_priority` で per-anim 単位に振り分け、 未設定は low に
+	// 落ちる (Phase B-1 暫定挙動踏襲)。 variant は apply_frame の前提条件 (variant 切替 storage 参照) の
+	// ため immediate 固定 :
 	//   - 1 ref = 1 関数 (project 単位集約済み) で 1 tick で flush 完了 → idle 復帰早い
 	//   - global priority 順序保証で variant 先 → bone 後 のロード順序が成立
-	for (const { refs } of expandRefsByAnim) buckets.low.push(...refs)
+	for (const { refs, priority } of expandRefsByAnim) buckets[priority].push(...refs)
 	if (variantsExpandRef !== null) buckets.immediate.push(variantsExpandRef)
 
 	const formatList = (arr: string[]): string =>

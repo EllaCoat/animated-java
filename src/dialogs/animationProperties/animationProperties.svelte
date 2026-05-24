@@ -16,6 +16,8 @@
 		loopMode: Observable<string>
 		loopDelay: Observable<number>
 		excludedNodes: Observable<Array<{ name: string; value: string }>>
+		tsbPriority: Observable<string>
+		tsbOptimizedEnabled: boolean
 	}
 
 	let {
@@ -23,6 +25,8 @@
 		loopMode = $bindable(),
 		loopDelay = $bindable(),
 		excludedNodes = $bindable(),
+		tsbPriority = $bindable(),
+		tsbOptimizedEnabled,
 	}: Props = $props()
 
 	const AVAILABLE_BONES = getAvailableNodes(excludedNodes.get())
@@ -74,6 +78,20 @@
 		defaultValue={0}
 		bind:value={loopDelay}
 	/>
+
+	{#if tsbOptimizedEnabled}
+		<Select
+			label={translate('dialog.animation_properties.tsb_priority.title')}
+			tooltip={translate('dialog.animation_properties.tsb_priority.description')}
+			options={{
+				immediate: translate('dialog.animation_properties.tsb_priority.options.immediate'),
+				high: translate('dialog.animation_properties.tsb_priority.options.high'),
+				low: translate('dialog.animation_properties.tsb_priority.options.low'),
+			}}
+			defaultOption={'low'}
+			bind:value={tsbPriority}
+		/>
+	{/if}
 
 	<Collection
 		label={translate('dialog.animation_properties.excluded_nodes.title')}
