@@ -40,7 +40,8 @@ export interface BlueprintSettings {
 	use_storage_for_animation: boolean
 	use_entity_stacking: boolean
 	// TSB Optimized Export (TSB-specific variant, 1.20.4-tsb only)
-	// tsb_quantization_digits_default: default 5, range 2..7
+	// tsb_quantization_digits_default: default 4, range 2..7
+	// (= vanilla MC display entity の標準桁数 4 桁に合わせる、 ちぇん氏知見)
 	tsb_optimized_export: boolean
 	tsb_quantization_digits_default: number
 	tsb_cells_per_tick: number
@@ -90,7 +91,7 @@ export const defaultValues: BlueprintSettings = {
 
 	// TSB Optimized Export
 	tsb_optimized_export: false,
-	tsb_quantization_digits_default: 5,
+	tsb_quantization_digits_default: 4,
 	tsb_cells_per_tick: 1000,
 	tsb_max_line_bytes: 1_000_000,
 	tsb_silent_uninstall: true,
