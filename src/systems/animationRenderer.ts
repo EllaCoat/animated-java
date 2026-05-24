@@ -105,6 +105,11 @@ export interface IRenderedAnimation {
 	 * Nodes that were modified by the animation
 	 */
 	modified_nodes: Record<string, AnyRenderedNode>
+	/**
+	 * TSB Optimized Export only : load priority bucket for the per-bp queue (Phase B-1.5 / B-1.6).
+	 * `immediate` を選んだアニメは on_load 直後に variants と並んで即展開される。 default `low`。
+	 */
+	tsb_priority?: 'immediate' | 'high' | 'low'
 }
 
 let lastAnimation: _Animation | undefined
@@ -317,6 +322,7 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 		duration: 0,
 		loop_mode: animation.loop,
 		modified_nodes: {},
+		tsb_priority: animation.tsb_priority,
 	} as IRenderedAnimation
 	animation.select()
 

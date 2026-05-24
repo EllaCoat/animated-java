@@ -8,14 +8,17 @@ declare global {
 	// eslint-disable-next-line @typescript-eslint/naming-convention
 	interface _Animation {
 		excluded_nodes: CollectionItem[]
+		tsb_priority?: 'immediate' | 'high' | 'low'
 	}
 
 	interface AnimationUndoCopy {
 		excluded_nodes: string[]
+		tsb_priority?: 'immediate' | 'high' | 'low'
 	}
 
 	interface AnimationOptions {
 		excluded_nodes: string[]
+		tsb_priority?: 'immediate' | 'high' | 'low'
 	}
 }
 
@@ -101,12 +104,25 @@ registerPatch({
 				default: [],
 			}
 		)
+		const tsbPriorityProperty = new Property(
+			Blockbench.Animation,
+			'string',
+			'tsb_priority',
+			{
+				condition: () =>
+					activeProjectIsBlueprintFormat() &&
+					!!Project?.animated_java?.tsb_optimized_export,
+				label: translate('animation.tsb_priority'),
+				default: 'low',
+			}
+		)
 
-		return { excludedNodesProperty }
+		return { excludedNodesProperty, tsbPriorityProperty }
 	},
 
-	revert: ({ excludedNodesProperty }) => {
+	revert: ({ excludedNodesProperty, tsbPriorityProperty }) => {
 		excludedNodesProperty.delete()
+		tsbPriorityProperty.delete()
 	},
 })
 
