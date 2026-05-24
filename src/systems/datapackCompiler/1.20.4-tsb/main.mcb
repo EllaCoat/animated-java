@@ -607,14 +607,24 @@ IF (has_animations) {
 				# ARGS: {anim_id: int}  (root entity の on_tick から storage 経由で current_anim を流す)
 				# 純正 zzz/on_tick (line 287-335) 集約版。 tween 制御 + last_frame_effects + apply +
 				# loop/hold/once 判定を 1 関数で実施。 lp/dly/dur/hl は meta d.anims[anim_id] から runtime 取得。
+				#
+				# 重要 : vanilla 1.20.4 の path syntax で `path[<int>] {<compound>}` は invalid
+				# (= MacroFunction.instantiate で parseCommand fail → FunctionInstantiationException →
+				#   silent function-wide skip)。 hl / lp / dur / dly は全て score 経由で比較する。
 
 				# tween logic
 				scoreboard players remove @s <%OBJECTIVES.TWEEN_DURATION()%> 1
 				execute if score @s <%OBJECTIVES.TWEEN_DURATION()%> matches 1.. run return 1
 				execute if score @s <%OBJECTIVES.TWEEN_DURATION()%> matches 0 on passengers store result entity @s interpolation_duration int 1 run scoreboard players get #<%blueprint_id.replace(':', '.')%> <%OBJECTIVES.DUR(blueprint_id)%>
 
+				# anim meta (hl / lp / dur / dly) を score にロード (= path[$(anim_id)] {filter} 不可のため)
+				$execute store result score #hl <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].hl
+				$execute store result score #lp <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].lp
+				$execute store result score #dur <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dur
+				$execute store result score #dly <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dly
+
 				# last_frame_effects patch (hl=1b の anim で frame=-1 のとき = loop+delay=0+副作用持ち最終 frame)
-				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {hl:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> matches -1 run function <%blueprint_id%>/animations/_lfx_dispatch {anim_id: $(anim_id)}
+				$execute if score #hl <%OBJECTIVES.I()%> matches 1 if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> matches -1 run function <%blueprint_id%>/animations/_lfx_dispatch {anim_id: $(anim_id)}
 
 				# apply current frame (storage 経由で _zzz_apply_frame に流す)
 				data remove storage <%project_storage.replace(':', '.')%>:tmp d
@@ -622,24 +632,20 @@ IF (has_animations) {
 				execute store result storage <%project_storage.replace(':', '.')%>:tmp d.frame int 1 run scoreboard players get @s <%OBJECTIVES.FRAME_BP(blueprint_id)%>
 				function <%blueprint_id%>/animations/_zzz_apply_frame with storage <%project_storage.replace(':', '.')%>:tmp d
 
-				# loop / hold / once 判定 (runtime 動的)。 dur / dly は meta から score にロードして比較。
-				$execute store result score #dur <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dur
-				$execute store result score #dly <%OBJECTIVES.I()%> run data get storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)].dly
-
-				# loop モード (lp=1b) : 限界 = dur - 2 + dly。 dly=0 なら frame=-1、 dly>0 なら frame=0。
+				# loop モード (lp=1b → score 1) : 限界 = dur - 2 + dly。 dly=0 なら frame=-1、 dly>0 なら frame=0。
 				scoreboard players operation #limit <%OBJECTIVES.I()%> = #dur <%OBJECTIVES.I()%>
 				scoreboard players operation #limit <%OBJECTIVES.I()%> += #dly <%OBJECTIVES.I()%>
 				scoreboard players remove #limit <%OBJECTIVES.I()%> 2
-				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 0 run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> -1
-				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:1b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 1.. run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
+				execute if score #lp <%OBJECTIVES.I()%> matches 1 if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 0 run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> -1
+				execute if score #lp <%OBJECTIVES.I()%> matches 1 if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> if score #dly <%OBJECTIVES.I()%> matches 1.. run return run scoreboard players set @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 0
 
-				# hold モード (lp=2b) : 限界 = dur - 1。 達したら current_anim=-1 (pause、 純正 line 320 の pause)。
+				# hold モード (lp=2b → score 2) : 限界 = dur - 1。 達したら current_anim=-1 (pause、 純正 line 320 の pause)。
 				scoreboard players operation #limit <%OBJECTIVES.I()%> = #dur <%OBJECTIVES.I()%>
 				scoreboard players remove #limit <%OBJECTIVES.I()%> 1
-				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:2b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
+				execute if score #lp <%OBJECTIVES.I()%> matches 2 if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run scoreboard players set @s <%OBJECTIVES.CURRENT_ANIM(blueprint_id)%> -1
 
-				# once モード (lp=0b) : 限界 = dur - 1。 達したら _once_finish で停止 + frame=0 反映。
-				$execute if data storage <%project_storage.replace(':', '.')%>:meta d.anims[$(anim_id)] {lp:0b} if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run function <%blueprint_id%>/animations/_once_finish {anim_id: $(anim_id)}
+				# once モード (lp=0b → score 0) : 限界 = dur - 1。 達したら _once_finish で停止 + frame=0 反映。
+				$execute if score #lp <%OBJECTIVES.I()%> matches 0 if score @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> >= #limit <%OBJECTIVES.I()%> run return run function <%blueprint_id%>/animations/_once_finish {anim_id: $(anim_id)}
 
 				scoreboard players add @s <%OBJECTIVES.FRAME_BP(blueprint_id)%> 1
 			}
