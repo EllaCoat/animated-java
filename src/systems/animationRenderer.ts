@@ -377,6 +377,8 @@ export function getAnimatableNodes(): OutlinerElement[] {
 		...TextDisplay.all,
 		...VanillaBlockDisplay.all,
 		...VanillaItemDisplay.all,
+		// NullObject は chain bones (Group) の displayFrame 後に displayIK を発火させる必要があるため末尾近くに並べる
+		...NullObject.all,
 		// @ts-expect-error - Broken BB types
 		...(OutlinerElement.types.camera ? OutlinerElement.types.camera.all : []),
 	]
