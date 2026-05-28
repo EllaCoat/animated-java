@@ -98,8 +98,14 @@
 	})
 
 	$effect(() => {
-		setKeyframeEasing(selectedKeyframe, easingType, easingMode)
-		setKeyframeEasingArg(selectedKeyframe, easingArg)
+		const selected = Timeline.selected as _Keyframe[] | undefined
+		const targets = selected?.length
+			? selected.filter(kf => kf.interpolation === 'linear')
+			: [selectedKeyframe]
+		for (const kf of targets) {
+			setKeyframeEasing(kf, easingType, easingMode)
+			setKeyframeEasingArg(kf, easingArg)
+		}
 		Animator.preview()
 	})
 </script>
