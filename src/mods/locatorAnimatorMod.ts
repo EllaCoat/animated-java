@@ -135,7 +135,7 @@ registerPropertyOverridePatch({
 
 	get: original => {
 		return function (target?: Group) {
-			if (!target || target instanceof Locator) return
+			if (target instanceof Locator) return
 			return original(target)
 		}
 	},
