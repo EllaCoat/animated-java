@@ -84,11 +84,11 @@ registerPatch({
 				openDialog()
 			},
 		})
-		if (Toolbars.keyframe) Toolbars.keyframe.add(action, -1)
+		if (Toolbars.timeline) Toolbars.timeline.add(action, -1)
 		return { action }
 	},
 	revert({ action }: { action: Action }) {
-		if (Toolbars.keyframe) Toolbars.keyframe.remove(action)
+		if (Toolbars.timeline) Toolbars.timeline.remove(action)
 		action.delete()
 	},
 })
