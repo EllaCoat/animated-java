@@ -144,6 +144,17 @@ async function actuallyExportProject({
 				.digest('hex')
 		}
 
+		// 新規パック生成 : resource pack 出力先フォルダが無ければ作成する
+		// (validateResourcePackFolder で未存在を warning 許容済、 pack.mcmeta は resourcepackCompiler が生成)
+		// plugin mode では RP export が skip されるため mkdir もしない (空フォルダ防止)
+		if (
+			!aj.enable_plugin_mode &&
+			aj.tsb_create_new_packs &&
+			aj.resource_pack_export_mode === 'folder'
+		) {
+			const { mkdirSync } = getFsModule()
+			mkdirSync(resourcePackFolder, { recursive: true })
+		}
 		// TODO - Plugin mode should run without the resource pack compiler
 		// Always run the resource pack compiler because it calculates custom model data.
 		await resourcepackCompiler(aj.target_minecraft_version, {
@@ -156,6 +167,12 @@ async function actuallyExportProject({
 		})
 
 		if (!aj.enable_plugin_mode && aj.data_pack_export_mode !== 'none') {
+			// 新規パック生成 : 出力先フォルダが無ければ作成する
+			// (validateDataPackFolder で未存在を warning 許容済、 pack.mcmeta は compileDataPack が生成)
+			if (aj.tsb_create_new_packs && aj.data_pack_export_mode === 'folder') {
+				const { mkdirSync } = getFsModule()
+				mkdirSync(dataPackFolder, { recursive: true })
+			}
 			await compileDataPack(aj.target_minecraft_version, {
 				rig,
 				animations,

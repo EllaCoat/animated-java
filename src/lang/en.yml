@@ -281,14 +281,17 @@ animated_java:
           The root folder of a Resource Pack to export the project to.
 
           The targeted Resource Pack must contain a `pack.mcmeta` file.
-        warning:
-          no_assets: Selected folder does not contain an assets folder.
-        error:
-          empty: Resource Pack folder is required.
-          invalid_path: 'Failed to resolve path: %s'
-          does_not_exist: Selected path does not exist.
-          not_a_dir: Selected path is not a directory.
-          no_pack_mcmeta: Selected folder does not contain a pack.mcmeta file.
+        folder:
+          warning:
+            no_assets: Selected folder does not contain an assets folder.
+            will_be_created: Selected folder does not exist. It will be created on export.
+            will_create_pack_mcmeta: Selected folder has no pack.mcmeta. A new one will be generated on export.
+          error:
+            empty: Resource Pack folder is required.
+            invalid_path: 'Failed to resolve path: %s'
+            does_not_exist: Selected path does not exist.
+            not_a_dir: Selected path is not a directory.
+            no_pack_mcmeta: Selected folder does not contain a pack.mcmeta file.
       data_pack_settings:
         title: Data Pack
       data_pack:
@@ -298,6 +301,8 @@ animated_java:
             The folder to export the Data Pack to.
           warning:
             no_data: Selected folder does not contain a data folder.
+            will_be_created: Selected folder does not exist. It will be created on export.
+            will_create_pack_mcmeta: Selected folder has no pack.mcmeta. A new one will be generated on export.
           error:
             empty: Data Pack folder is required.
             invalid_path: 'Failed to resolve path: %s'
@@ -312,6 +317,13 @@ animated_java:
             empty: Value cannot be empty!
             invalid_path: 'Failed to resolve path: %s'
             require_zip_extension: Selected file must end with .zip extension.
+      tsb_create_new_packs:
+        title: Create New Pack
+        description: |-
+          [Markdown]
+          Allow exporting into a new or empty folder for both the Data Pack and Resource Pack.
+
+          When enabled, a missing folder or a folder without `pack.mcmeta` is accepted (downgraded to a warning); the folder is created and `pack.mcmeta` is generated on export.
       on_summon_function:
         title: On-Summon Function
         description: |-

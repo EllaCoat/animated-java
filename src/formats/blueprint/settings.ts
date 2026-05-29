@@ -48,6 +48,8 @@ export interface BlueprintSettings {
 	tsb_max_line_bytes: number
 	tsb_silent_uninstall: boolean
 	tsb_load_debug_log: boolean
+	// 新規パック生成 (DP/RP の pack.mcmeta / フォルダ未存在を許容し、 export 時に新規作成する)
+	tsb_create_new_packs: boolean
 	// Plugin Settings
 	baked_animations: boolean
 	json_file: string
@@ -96,6 +98,7 @@ export const defaultValues: BlueprintSettings = {
 	tsb_max_line_bytes: 1_000_000,
 	tsb_silent_uninstall: true,
 	tsb_load_debug_log: false,
+	tsb_create_new_packs: false,
 
 	// Plugin Settings
 	baked_animations: true,
@@ -206,6 +209,10 @@ export async function validateTargetMinecraftVersion(value: string): Promise<Val
 }
 
 export function validateResourcePackFolder(value: string): ValueCheckResult {
+	// 新規パック生成モードでは、 フォルダ未存在 / pack.mcmeta 不在を warning に降格する
+	// (出力エンジンが pack.mcmeta を新規生成でき、 export 時に mkdir される)。
+	const createNew = Project?.animated_java?.tsb_create_new_packs ?? false
+
 	if (value === '') {
 		return {
 			type: 'error',
@@ -228,8 +235,12 @@ export function validateResourcePackFolder(value: string): ValueCheckResult {
 
 	if (!existsSync(path)) {
 		return {
-			type: 'error',
-			message: localize('resource_pack.folder.error.does_not_exist'),
+			type: createNew ? 'warning' : 'error',
+			message: localize(
+				createNew
+					? 'resource_pack.folder.warning.will_be_created'
+					: 'resource_pack.folder.error.does_not_exist'
+			),
 		}
 	}
 
@@ -242,8 +253,12 @@ export function validateResourcePackFolder(value: string): ValueCheckResult {
 
 	if (!existsSync(join(path, 'pack.mcmeta'))) {
 		return {
-			type: 'error',
-			message: localize('resource_pack.folder.error.no_pack_mcmeta'),
+			type: createNew ? 'warning' : 'error',
+			message: localize(
+				createNew
+					? 'resource_pack.folder.warning.will_create_pack_mcmeta'
+					: 'resource_pack.folder.error.no_pack_mcmeta'
+			),
 		}
 	}
 
@@ -256,6 +271,10 @@ export function validateResourcePackFolder(value: string): ValueCheckResult {
 }
 
 export function validateDataPackFolder(value: string): ValueCheckResult {
+	// 新規パック生成モードでは、 フォルダ未存在 / pack.mcmeta 不在を error でなく
+	// warning に降格する (出力エンジンは pack.mcmeta を新規生成でき、 export 時に mkdir される)。
+	const createNew = Project?.animated_java?.tsb_create_new_packs ?? false
+
 	if (value === '') {
 		return {
 			type: 'error',
@@ -278,8 +297,12 @@ export function validateDataPackFolder(value: string): ValueCheckResult {
 
 	if (!existsSync(path)) {
 		return {
-			type: 'error',
-			message: localize('data_pack.folder.error.does_not_exist'),
+			type: createNew ? 'warning' : 'error',
+			message: localize(
+				createNew
+					? 'data_pack.folder.warning.will_be_created'
+					: 'data_pack.folder.error.does_not_exist'
+			),
 		}
 	}
 
@@ -292,8 +315,12 @@ export function validateDataPackFolder(value: string): ValueCheckResult {
 
 	if (!existsSync(join(path, 'pack.mcmeta'))) {
 		return {
-			type: 'error',
-			message: localize('data_pack.folder.error.no_pack_mcmeta'),
+			type: createNew ? 'warning' : 'error',
+			message: localize(
+				createNew
+					? 'data_pack.folder.warning.will_create_pack_mcmeta'
+					: 'data_pack.folder.error.no_pack_mcmeta'
+			),
 		}
 	}
 
