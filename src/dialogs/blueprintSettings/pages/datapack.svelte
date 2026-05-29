@@ -11,10 +11,17 @@
 
 	let dataPackExportFormat = $state(Project.animated_java.data_pack_export_mode)
 	let dataPackLocation = $state(Project.animated_java.data_pack)
+	let createNewPacks = $state(Project.animated_java.tsb_create_new_packs)
 	let animationSystem = $state(
 		Project.animated_java.use_storage_for_animation ? 'storage' : 'functions'
 	)
 	let autoUpdateRigOrientation = $state(Project.animated_java.auto_update_rig_orientation)
+
+	// 新規生成トグルは即 Project に反映する
+	// (SelectFolder の checkValue=validateDataPackFolder が最新値で判定できるように)
+	$effect(() => {
+		Project.animated_java.tsb_create_new_packs = createNewPacks
+	})
 
 	onDestroy(() => {
 		Project.animated_java.data_pack_export_mode = dataPackExportFormat
@@ -55,6 +62,11 @@
 			checkValue={validateDataPackFolder}
 			required
 		></SelectFolder>
+		<Checkbox
+			label={translate('tsb_create_new_packs.title')}
+			description={translate('tsb_create_new_packs.description')}
+			bind:value={createNewPacks}
+		></Checkbox>
 	{:else if dataPackExportFormat === 'zip'}
 		<SelectFile
 			label={translate('data_pack.zip.title')}
