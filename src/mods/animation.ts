@@ -38,18 +38,27 @@ registerPropertyOverridePatch({
 			// BB animation.js:105 の bone fallback で NullObject の animator が
 			// BoneAnimator として復元される問題の回避 (= 仮説 D 新規腐敗防止)。
 			// load 直前に animators[uuid].type を element の実型に矯正する。
-			const animators = (data as any)?.animators as
-				| Record<string, { type?: string } | undefined>
-				| undefined
-			if (animators) {
-				for (const uuid in animators) {
-					const entry = animators[uuid]
-					if (!entry) continue
-					const elem = OutlinerNode.uuids[uuid]
-					if (elem instanceof NullObject && entry.type !== 'null_object') {
-						entry.type = 'null_object'
+			// plugin load 経路を絶対に止めないため try/catch で silent fail に倒す。
+			try {
+				const animators = (data as any)?.animators as
+					| Record<string, { type?: string } | undefined>
+					| undefined
+				if (animators && typeof OutlinerNode !== 'undefined') {
+					for (const uuid in animators) {
+						const entry = animators[uuid]
+						if (!entry) continue
+						const elem = OutlinerNode.uuids?.[uuid]
+						if (
+							typeof NullObject !== 'undefined' &&
+							elem instanceof NullObject &&
+							entry.type !== 'null_object'
+						) {
+							entry.type = 'null_object'
+						}
 					}
 				}
+			} catch (e) {
+				console.warn('[AJ] NullObject animator type correction skipped:', e)
 			}
 			original.call(this, data)
 			this.snapping = DEFAULT_SNAPPING_VALUE
