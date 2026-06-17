@@ -5,17 +5,9 @@ import { DisplayEntityConfig } from '../../../nodeConfigs'
 export default function upgrade(model: any) {
 	console.log('Processing model format 1.0.0-pre1', model)
 
-	if (!model.animated_java) {
-		throw new Error(
-			'Animated Java blueprint upgrade failed at 1.0.0-pre1: ' +
-				'model.animated_java is missing. The file may have been saved as a ' +
-				'non-AJ format by mistake. Restore from a backup.'
-		)
-	}
-
 	const defaultSettings = getDefaultProjectSettings()
 	const datapackExporterSettings =
-		model.animated_java.exporter_settings?.['animated_java:datapack_exporter']
+		model.animated_java.exporter_settings['animated_java:datapack_exporter']
 
 	const defaultVariant = model.animated_java.variants.find((v: any) => !!v.default)
 	const blueprint: Record<string, any> = {

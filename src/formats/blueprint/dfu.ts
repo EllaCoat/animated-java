@@ -22,25 +22,6 @@ import v1_6_5 from './versions/1.6.5'
 import v1_8_0 from './versions/1.8.0'
 
 export function upgradeAnimatedJavaBlueprint(model: any): IBlueprintFormatJSON {
-	// Sanity check: 非 AJ blueprint (= BB generic format などで誤 save された file) が
-	// AJ の upgrade chain に流れ込むと `length === 3` 経路を踏んで 1.0.0-pre1 で爆死する。
-	// AJ format / 旧 ajmodel format / animated_java field のどれもなければ refuse する。
-	const metaFormat = model?.meta?.format
-	const metaModelFormat = model?.meta?.model_format
-	const looksLikeAJ =
-		metaFormat === 'animated-java:format/blueprint' ||
-		metaFormat === 'animated_java_blueprint' ||
-		metaModelFormat === 'animatedJava/ajmodel' ||
-		metaModelFormat === 'animated_java/ajmodel' ||
-		model?.animated_java != null
-	if (!looksLikeAJ) {
-		throw new Error(
-			`Refusing to upgrade non-Animated-Java blueprint. ` +
-				`meta.format=${metaFormat ?? 'unset'}, meta.model_format=${metaModelFormat ?? 'unset'}. ` +
-				`The file may have been saved as a non-AJ format by mistake — restore from a backup.`
-		)
-	}
-
 	if (model?.meta?.model_format === 'animatedJava/ajmodel') {
 		model.meta.model_format = 'animated_java/ajmodel'
 		model.meta.format_version = '0.0'
