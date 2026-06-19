@@ -353,7 +353,6 @@ export const BLUEPRINT_FORMAT = registerDeletableHandlerPatch({
 			animation_mode: true,
 			bone_binding_expression: true,
 			bone_rig: true,
-			armature_rig: true,
 			box_uv: false,
 			centered_grid: true,
 			display_mode: false,
