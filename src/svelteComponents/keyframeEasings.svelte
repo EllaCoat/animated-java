@@ -2,7 +2,7 @@
 	import { onMount } from 'svelte'
 	// @ts-expect-error No types for glob imports
 	import { default as ICON_IMPORTS, filenames } from '../assets/easingIcons/*.svg'
-	import { getEasingArgDefault, hasArgs } from '../util/easing'
+	import { getEasingArgDefault, hasArgs, type EasingKey } from '../util/easing'
 	import { localize as translate } from '../util/lang'
 
 	const ICONS = Object.fromEntries(
@@ -97,17 +97,52 @@
 		easingArg = arg
 	})
 
-	$effect(() => {
+	// $effect は廃止し、 onChange handler ベースに変更
+	// (= 元来は state 変化で $effect が常に発火し、 Animator.preview() 経由で
+	//    update_keyframe_selection event を self-feeding していた。
+	//    handler 直叩きで Undo wrap と loop 断ち切りを同時に達成)
+
+	function getTargets(): _Keyframe[] {
 		const selected = Timeline.selected as _Keyframe[] | undefined
-		const targets = selected?.length
+		return selected?.length
 			? selected.filter(kf => kf.interpolation === 'linear')
 			: [selectedKeyframe]
+	}
+
+	function applyEasing(action: string) {
+		const targets = getTargets()
+		Undo.initEdit({ keyframes: targets })
 		for (const kf of targets) {
 			setKeyframeEasing(kf, easingType, easingMode)
 			setKeyframeEasingArg(kf, easingArg)
 		}
 		Animator.preview()
-	})
+		Undo.finishEdit(action)
+	}
+
+	function chooseType(type: string) {
+		easingType = type
+		if (type === 'linear') {
+			easingMode = undefined
+			easingArg = undefined
+		} else {
+			easingMode ??= 'inout'
+			const fn = getEasingFunctionName(easingType, easingMode)
+			if (hasArgs(fn)) {
+				easingArg ??= getEasingArgDefault(fn as EasingKey)
+			}
+		}
+		applyEasing('Change keyframe easing type')
+	}
+
+	function chooseMode(mode: string) {
+		easingMode = mode
+		applyEasing('Change keyframe easing mode')
+	}
+
+	function commitArg() {
+		applyEasing('Change keyframe easing argument')
+	}
 </script>
 
 {#if selectedKeyframe?.interpolation === 'linear'}
@@ -120,25 +155,23 @@
 		>
 			{translate('panel.keyframe.easing_type.title')}
 		</label>
-		{#key easingType}
-			<div id="easing_type_input" class="easing-container">
-				{#each EASING_TYPES as ease}
-					<button
-						class="easing-type"
-						title={translate(`panel.keyframe.easing_type.options.${ease}`)}
-						onclick={() => (easingType = ease)}
-					>
-						<img
-							class={easingType === ease ? 'selected-keyframe-icon' : ''}
-							src={ICONS[ease]}
-							alt={ease}
-						/>
-					</button>
-				{/each}
-			</div>
-		{/key}
+		<div id="easing_type_input" class="easing-container">
+			{#each EASING_TYPES as ease}
+				<button
+					class="easing-type"
+					title={translate(`panel.keyframe.easing_type.options.${ease}`)}
+					onclick={() => chooseType(ease)}
+				>
+					<img
+						class={easingType === ease ? 'selected-keyframe-icon' : ''}
+						src={ICONS[ease]}
+						alt={ease}
+					/>
+				</button>
+			{/each}
+		</div>
 	</div>
-	{#if selectedKeyframe.easing !== 'linear'}
+	{#if easingType !== 'linear'}
 		<div class="bar flex">
 			<label
 				for="easing_mode_input"
@@ -148,23 +181,21 @@
 			>
 				{translate('panel.keyframe.easing_mode.title')}
 			</label>
-			{#key easingFunction}
-				<div id="easing_mode_input" class="easing-container">
-					{#each EASING_MODES as mode}
-						<button
-							class="easing-type"
-							title={translate(`panel.keyframe.easing_mode.options.${mode}`)}
-							onclick={() => (easingMode = mode)}
-						>
-							<img
-								class={easingMode === mode ? 'selected-keyframe-icon' : ''}
-								src={EASING_MODE_ICONS[mode]}
-								alt={mode}
-							/>
-						</button>
-					{/each}
-				</div>
-			{/key}
+			<div id="easing_mode_input" class="easing-container">
+				{#each EASING_MODES as mode}
+					<button
+						class="easing-type"
+						title={translate(`panel.keyframe.easing_mode.options.${mode}`)}
+						onclick={() => chooseMode(mode)}
+					>
+						<img
+							class={easingMode === mode ? 'selected-keyframe-icon' : ''}
+							src={EASING_MODE_ICONS[mode]}
+							alt={mode}
+						/>
+					</button>
+				{/each}
+			</div>
 		</div>
 	{/if}
 	{#if hasArgs(easingFunction)}
@@ -185,6 +216,7 @@
 				step="0.1"
 				min="0"
 				bind:value={easingArg}
+				onchange={commitArg}
 			/>
 		</div>
 	{/if}
