@@ -2,6 +2,7 @@
 // - 選択中 keyframe (= .keyframe.selected) を mouseover した時に keyframe element の右側に popup mount
 // - popup 内は keyframeEasingsPopup.svelte (= 既存 easing UI + XYZ input)
 // - mouse が keyframe / popup の両方から離れた時に unmount (= 100ms grace で chatter 防止)
+// - blockbench-anim-ux (= 別 plugin) が居る場合は popout 子窓内でも動作する (= window.AnimUX 経由)
 
 import { registerPatch } from 'blockbench-patch-manager'
 import { injectComponent } from 'svelte-patching-tools'
@@ -9,7 +10,54 @@ import { activeProjectIsBlueprintFormat } from '../formats/blueprint'
 import KeyframeEasingsPopupSvelte from '../svelteComponents/keyframeEasingsPopup.svelte'
 import { isFirstKeyframe } from './keyframeEasings'
 
+// blockbench-anim-ux (= sibling plugin) が公開する optional API。
+// 居ない場合は素の document.addEventListener にフォールバックする。
+type AnimUxExternal = {
+	version: string
+	addDocumentListener(
+		type: string,
+		fn: EventListenerOrEventListenerObject,
+		opts?: boolean | AddEventListenerOptions,
+	): () => void
+	getActivePopoutDocument(): Document | null
+}
+
+function getAnimUx(): AnimUxExternal | undefined {
+	return (window as unknown as { AnimUX?: AnimUxExternal }).AnimUX
+}
+
+// 親 document に直登録 + 必要なら popout 子窓にも attach する helper。
+// anim_ux 未 install / 旧 version (= addDocumentListener 未対応) でも害なく degrade する。
+function attachDocListener(
+	type: string,
+	fn: EventListenerOrEventListenerObject,
+	opts?: boolean | AddEventListenerOptions,
+): () => void {
+	const animUx = getAnimUx()
+	if (animUx?.addDocumentListener) {
+		try {
+			return animUx.addDocumentListener(type, fn, opts)
+		} catch (e) {
+			console.warn('[AJ] AnimUX.addDocumentListener failed, fallback to document', e)
+		}
+	}
+	document.addEventListener(type, fn, opts)
+	return (): void => {
+		try {
+			document.removeEventListener(type, fn, opts as boolean | EventListenerOptions | undefined)
+		} catch {
+			/* noop */
+		}
+	}
+}
+
 const POPUP_ID = 'aj-keyframe-easing-popup'
+const POPUP_CSS_ID = 'aj-keyframe-easing-popup-css'
+// svelte component の <style> は svelte-patching-tools esbuild plugin 経由で Blockbench.addCSS() に変換される
+// (= node_modules/svelte-patching-tools/dist/esbuildPlugin.js:118)。 addCSS は親 document.head 固定なので
+// (= js/api.ts:311)、 anim_ux popout で開いた子窓には届かない。 popup の内部レイアウト CSS をここに
+// 統合して ensurePopupCssIn で子窓に確実に inject、 cascade で svelte 側の同 selector に勝つ (= id selector で
+// specificity も上)。 親 document 上では svelte CSS と同 selector で重複するが、 cascade 順序的に問題なし。
 const POPUP_CSS = `
 #${POPUP_ID} {
 	position: fixed;
@@ -21,7 +69,101 @@ const POPUP_CSS = `
 	min-width: 360px;
 	max-width: 90vw;
 }
+#${POPUP_ID} .aj-popup-inner {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+	padding: 6px;
+}
+#${POPUP_ID} .aj-popup-xyz-inputs {
+	display: flex;
+	flex-direction: row;
+	gap: 4px;
+	margin-left: 2px;
+}
+#${POPUP_ID} .aj-popup-axis-cell {
+	display: flex;
+	flex-direction: row;
+	align-items: stretch;
+}
+#${POPUP_ID} .aj-popup-axis-bump {
+	min-width: 16px;
+	width: 16px;
+	padding: 0;
+	margin: 0;
+	border: 1px solid var(--color-border);
+	background: var(--color-button);
+	color: var(--color-text);
+	cursor: pointer;
+	font-size: 12px;
+	line-height: 1;
+	user-select: none;
+	border-radius: 0;
+}
+#${POPUP_ID} .aj-popup-axis-bump:hover {
+	background: var(--color-selected);
+}
+#${POPUP_ID} .aj-popup-axis-input {
+	width: 60px;
+	text-align: center;
+	border-left: none;
+	border-right: none;
+	border-radius: 0;
+}
+#${POPUP_ID} .aj-popup-axis-cell.readonly .aj-popup-axis-input {
+	width: 92px;
+}
+#${POPUP_ID} .aj-popup-axis-readonly {
+	opacity: 0.6;
+	font-style: italic;
+}
+#${POPUP_ID} .easing-container {
+	display: flex;
+	flex-direction: row;
+	flex-wrap: wrap;
+	grid-gap: 2px;
+	margin-left: 2px;
+}
+#${POPUP_ID} .easing-type {
+	width: 32px;
+	padding: 0;
+	margin: 0;
+	min-width: unset;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+#${POPUP_ID} .easing-type:hover {
+	background-color: var(--color-selected);
+}
+#${POPUP_ID} .selected-keyframe-icon {
+	filter: invert(49%) sepia(16%) saturate(6320%) hue-rotate(198deg) brightness(101%) contrast(106%);
+}
+#${POPUP_ID} .easings-disabled {
+	margin-left: 16px;
+	font-size: 16px;
+	color: var(--color-subtle_text);
+	text-wrap: balance;
+	margin-bottom: 1rem;
+	font-style: italic;
+}
 `
+
+// 親 document 以外 (= anim_ux popout 子窓 等) に popup を mount する場合、 Blockbench.addCSS は
+// 親 head 固定で届かないため、 owner document 側にも同 CSS を ensure する。 同 id で再 mount しない
+// idempotent 設計 (= showPopup を連発しても <style> は 1 つだけ)。
+function ensurePopupCssIn(ownerDoc: Document): void {
+	if (ownerDoc === document) return
+	if (ownerDoc.getElementById(POPUP_CSS_ID)) return
+	try {
+		const style = ownerDoc.createElement('style')
+		style.id = POPUP_CSS_ID
+		style.textContent = POPUP_CSS
+		ownerDoc.head.appendChild(style)
+	} catch (e) {
+		console.warn('[AJ] popup css inject to popout document failed', e)
+	}
+}
 
 let unmountCallback: (() => Promise<void>) | null = null
 let activeKeyframeUuid: string | undefined = undefined
@@ -67,12 +209,14 @@ function positionPopup(node: HTMLElement, anchor: HTMLElement): void {
 	let left = rect.right + padding
 	let top = rect.bottom + padding
 	const popupRect = node.getBoundingClientRect()
+	// popup が anim_ux popout 子窓に乗ってる場合は親 window でなく子窓 window の幅で flip 判定する
+	const ownerWin = anchor.ownerDocument?.defaultView ?? window
 	// 画面右端ではみ出すなら keyframe の左側に flip
-	if (left + popupRect.width > window.innerWidth - 4) {
+	if (left + popupRect.width > ownerWin.innerWidth - 4) {
 		left = Math.max(4, rect.left - popupRect.width - padding)
 	}
 	// 画面下端ではみ出すなら上に flip
-	if (top + popupRect.height > window.innerHeight - 4) {
+	if (top + popupRect.height > ownerWin.innerHeight - 4) {
 		top = Math.max(4, rect.top - popupRect.height - padding)
 	}
 	node.style.left = `${left}px`
@@ -102,8 +246,15 @@ async function showPopup(kfElement: HTMLElement): Promise<void> {
 	// AJ 仕様 = 左端 (= 同 channel で時間順最初) の keyframe は easing 編集対象外
 	if (!kf || !kf.selected || isFirstKeyframe(kf)) return
 
-	// 既に同 keyframe を出してるなら何もしない (= cancel pending hide だけ)
-	if (activeKeyframeUuid === uuid && activePopupNode) {
+	// 既に同 keyframe を出していて、 popup が「同 document 内に生存」 してるなら作り直さず再利用。
+	// popout 状態遷移 (= 子窓 close → 親に戻る) で旧子窓 node が残ったままだと早期 return で skip
+	// されて popup が二度と再作成されない事故が起きるので、 isConnected + ownerDocument 一致を check。
+	if (
+		activeKeyframeUuid === uuid &&
+		activePopupNode &&
+		activePopupNode.isConnected &&
+		activePopupNode.ownerDocument === (kfElement.ownerDocument ?? document)
+	) {
 		cancelHide()
 		return
 	}
@@ -111,11 +262,16 @@ async function showPopup(kfElement: HTMLElement): Promise<void> {
 	// 別 keyframe の popup が残ってたら破棄してから新規 mount
 	await destroyPopup()
 
-	const node = document.createElement('div')
+	// popup mount 先は keyframe 自身の owner document = anim_ux popout 中なら子窓側になる。
+	// 子窓に居る keyframe を hover した時に親 document に popup を出すと別 monitor / 別 window に
+	// 飛ばされて視認不能になるため、 keyframe と同じ document に乗せる。
+	const ownerDoc = kfElement.ownerDocument ?? document
+	ensurePopupCssIn(ownerDoc)
+	const node = ownerDoc.createElement('div')
 	node.id = POPUP_ID
 	node.addEventListener('mouseenter', cancelHide)
 	node.addEventListener('mouseleave', scheduleHide)
-	document.body.appendChild(node)
+	ownerDoc.body.appendChild(node)
 	activePopupNode = node
 	activeKeyframeUuid = uuid
 
@@ -170,15 +326,27 @@ function applyToActiveInput(active: HTMLInputElement, delta: number): void {
 	if (!Number.isFinite(current)) return
 	const next = Math.round((current + delta) * 10000) / 10000
 	active.value = String(next)
-	// svelte の bind:value 経路 + oninput callback を起こす
-	active.dispatchEvent(new Event('input', { bubbles: true }))
+	// svelte の bind:value 経路 + oninput callback を起こす。
+	// popup が popout 子窓に乗っている場合は parent realm の Event を投げると realm 不一致を踏むので、
+	// active 自身の owner realm の Event constructor を使う。
+	const ownerWin = active.ownerDocument?.defaultView
+	const EventCtor = (ownerWin?.Event as typeof Event | undefined) ?? Event
+	active.dispatchEvent(new EventCtor('input', { bubbles: true }))
+}
+
+// event の発生元 document を割り出す helper。
+// popup が popout 子窓に乗っていると activeElement は子窓 document 側、 親 document.activeElement は
+// popup 内 input ではないので、 event.target の owner document を経由して active を取り直す。
+function getEventDocument(e: Event): Document {
+	const target = e.target as Element | null
+	return target?.ownerDocument ?? document
 }
 
 function onAxisKeyCapture(e: KeyboardEvent): void {
 	if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
 	// plain も含めて全部 capture で処理 (= type=text にしたので browser 標準 Arrow は無関係、
 	// 全 case で自前 getInterval が必要)
-	const active = document.activeElement as HTMLInputElement | null
+	const active = getEventDocument(e).activeElement as HTMLInputElement | null
 	if (!active || !active.matches(`#${POPUP_ID} input[data-axis]`)) return
 
 	e.preventDefault()
@@ -190,7 +358,7 @@ function onAxisKeyCapture(e: KeyboardEvent): void {
 }
 
 function onAxisWheelCapture(e: WheelEvent): void {
-	const active = document.activeElement as HTMLInputElement | null
+	const active = getEventDocument(e).activeElement as HTMLInputElement | null
 	if (!active || !active.matches(`#${POPUP_ID} input[data-axis]`)) return
 	if (e.target !== active) return
 
@@ -207,18 +375,23 @@ registerPatch({
 
 	apply: () => {
 		const cssDeletable = Blockbench.addCSS(POPUP_CSS)
-		document.addEventListener('mouseover', onMouseOver, true)
-		document.addEventListener('mouseout', onMouseOut, true)
-		document.addEventListener('keydown', onAxisKeyCapture, true)
-		document.addEventListener('wheel', onAxisWheelCapture, { capture: true, passive: false })
-		return { cssDeletable }
+		// anim_ux 経由で attach すると popout 中の子窓 document にも自動で追従する。
+		// 未 install / 旧 version では document.addEventListener にフォールバック (= attachDocListener 内処理)。
+		const detachOnMouseOver = attachDocListener('mouseover', onMouseOver, true)
+		const detachOnMouseOut = attachDocListener('mouseout', onMouseOut, true)
+		const detachOnAxisKey = attachDocListener('keydown', onAxisKeyCapture, true)
+		const detachOnAxisWheel = attachDocListener('wheel', onAxisWheelCapture, {
+			capture: true,
+			passive: false,
+		})
+		return { cssDeletable, detachOnMouseOver, detachOnMouseOut, detachOnAxisKey, detachOnAxisWheel }
 	},
 
-	revert: ({ cssDeletable }) => {
-		document.removeEventListener('mouseover', onMouseOver, true)
-		document.removeEventListener('mouseout', onMouseOut, true)
-		document.removeEventListener('keydown', onAxisKeyCapture, true)
-		document.removeEventListener('wheel', onAxisWheelCapture, true)
+	revert: ({ cssDeletable, detachOnMouseOver, detachOnMouseOut, detachOnAxisKey, detachOnAxisWheel }) => {
+		try { detachOnMouseOver() } catch { /* noop */ }
+		try { detachOnMouseOut() } catch { /* noop */ }
+		try { detachOnAxisKey() } catch { /* noop */ }
+		try { detachOnAxisWheel() } catch { /* noop */ }
 		cancelHide()
 		void destroyPopup()
 		cssDeletable.delete()
