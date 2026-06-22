@@ -62,6 +62,10 @@ export default getZipFile('${localPath}')
 import * as fflate from 'fflate/browser'
 const unzipped = fflate.unzipSync(Uint8Array.from(atob('${data}'), c => c.charCodeAt(0)))
 export default function getFile(path) {
+	if (!(path in unzipped)) {
+		console.error('[MCB] File not registered in zip:', path, 'Available:', Object.keys(unzipped))
+		return ''
+	}
 	return Buffer.from(unzipped[path]).toString('utf-8')
 }
 `,
