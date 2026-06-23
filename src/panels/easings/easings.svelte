@@ -313,8 +313,10 @@
 
 	.bar-flex-fix {
 		display: flex;
+		height: auto;
+		min-height: 30px;
 		margin-top: 2px;
-		/* min-height を撤廃 = Curve buttons が wrap で多段化したとき親行が container 高さに追従、
-		   下の Mode 行と重ならない */
+		/* min-height だけだと auto-grow 効くので、 Curve buttons が wrap した時も親行が
+		   container 高さに追従して下の Mode 行と重ならない。 KEYFRAME panel と同じ挙動。 */
 	}
 </style>
