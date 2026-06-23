@@ -100,7 +100,8 @@
 		selectedKeyframe?: _Keyframe
 	}
 	let { selectedKeyframe: propKeyframe }: Props = $props()
-	const isPanel = $derived(propKeyframe === undefined)
+	// $derived だと onMount snapshot とズレうるので const で固定。 popup mount 時 props 固定前提。
+	const isPanel = propKeyframe === undefined
 
 	let internalKeyframe = $state<_Keyframe | undefined>()
 	const selectedKeyframe = $derived(propKeyframe ?? internalKeyframe)
@@ -131,7 +132,8 @@
 	onMount(() => {
 		if (isPanel) {
 			Blockbench.on('update_keyframe_selection', onKeyframeSelectionUpdate)
-			syncFromKeyframe(Timeline.selected.at(0))
+			// 既に keyframe 選択済で mount された場合に internalKeyframe を反映 (= selectedKeyframe $derived を起こす)
+			onKeyframeSelectionUpdate()
 		} else {
 			syncFromKeyframe(propKeyframe)
 		}
