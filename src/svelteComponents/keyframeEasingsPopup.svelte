@@ -114,7 +114,10 @@
 	}
 
 	function onAxisWheel(e: WheelEvent, axis: 'x' | 'y' | 'z'): void {
-		if (document.activeElement !== e.currentTarget) return
+		// popup が anim_ux popout 子窓に乗っている場合は親 document.activeElement と一致しないので
+		// e.currentTarget の owner document で active を取り直す (= keyframeEasingsPopup.ts の getEventDocument と同じ対処)
+		const ownerDoc = (e.currentTarget as Element)?.ownerDocument ?? document
+		if (ownerDoc.activeElement !== e.currentTarget) return
 		e.preventDefault()
 		bumpAxis(axis, e.deltaY < 0 ? 1 : -1, e)
 	}

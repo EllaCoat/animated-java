@@ -147,6 +147,24 @@ const POPUP_CSS = `
 	margin-bottom: 1rem;
 	font-style: italic;
 }
+#${POPUP_ID} .message {
+	margin-left: 16px;
+	font-size: 16px;
+	color: var(--color-subtle_text);
+	text-wrap: balance;
+	margin-bottom: 1rem;
+	font-style: italic;
+}
+#${POPUP_ID} label {
+	background-color: var(--color-elevated);
+	padding-left: 8px;
+	align-content: center;
+}
+#${POPUP_ID} .bar-flex-fix {
+	display: flex;
+	margin-top: 2px;
+	min-height: 32px;
+}
 `
 
 // 親 document 以外 (= anim_ux popout 子窓 等) に popup を mount する場合、 Blockbench.addCSS は
