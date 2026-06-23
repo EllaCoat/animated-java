@@ -1,5 +1,6 @@
 <script lang="ts" module>
 	import { onDestroy, onMount } from 'svelte'
+	import EVENTS from '../../util/events'
 	import { getEasingArgDefault, hasArgs } from '../../util/easing'
 	// @ts-expect-error No types for glob imports
 	import { default as ICON_IMPORTS, filenames } from '../../assets/easingIcons/*.svg'
@@ -162,6 +163,10 @@
 		Undo.finishEdit('Change keyframe easing', { keyframes: targets })
 
 		Animator.preview()
+		// 視覚化 mod (= keyframeEasingVisualMod) に refresh trigger を投げて即時反映する。
+		// kf.easing は object property 変更で BB の update_keyframe_selection は発火しないため、
+		// AJ 内部 EVENTS 経路で publish (= 他 subscriber のみ叩き、 BB event 中継はしない)。
+		EVENTS.UPDATE_KEYFRAME_SELECTION.publish()
 	}
 </script>
 
@@ -205,7 +210,7 @@
 					{/each}
 				</div>
 		</div>
-		{#if selectedKeyframe.easing !== 'linear'}
+		{#if easingType !== 'linear'}
 			<div class="bar flex bar-flex-fix">
 				<label
 					for="easing_mode_input"
@@ -308,6 +313,7 @@
 
 	.bar-flex-fix {
 		display: flex;
+		flex-wrap: wrap;
 		margin-top: 2px;
 		min-height: 32px;
 	}
