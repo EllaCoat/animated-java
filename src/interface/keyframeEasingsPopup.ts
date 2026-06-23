@@ -187,6 +187,10 @@ let unmountCallback: (() => Promise<void>) | null = null
 let activeKeyframeUuid: string | undefined = undefined
 let activePopupNode: HTMLElement | null = null
 let hideTimer: ReturnType<typeof setTimeout> | null = null
+// showPopup 連発時の race 防止 token。 await destroyPopup() の最中に別 showPopup が割り込むと、
+// 旧 showPopup が後から mount を完成させて新 popup を上書きする可能性 (= reviewer 指摘 B5)。
+// 各 showPopup は自分の世代番号を確保し、 await 後に最新世代と一致しなければ mount を skip する。
+let popupGeneration = 0
 
 function cancelHide(): void {
 	if (hideTimer !== null) {
@@ -277,8 +281,10 @@ async function showPopup(kfElement: HTMLElement): Promise<void> {
 		return
 	}
 
-	// 別 keyframe の popup が残ってたら破棄してから新規 mount
+	// 自分の世代を確保してから別 keyframe の popup を破棄。 await 後に最新世代でなければ skip。
+	const myGeneration = ++popupGeneration
 	await destroyPopup()
+	if (myGeneration !== popupGeneration) return
 
 	// popup mount 先は keyframe 自身の owner document = anim_ux popout 中なら子窓側になる。
 	// 子窓に居る keyframe を hover した時に親 document に popup を出すと別 monitor / 別 window に
