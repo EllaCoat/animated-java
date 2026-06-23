@@ -8,7 +8,7 @@ import { registerPatch } from 'blockbench-patch-manager'
 import { injectComponent } from 'svelte-patching-tools'
 import { activeProjectIsBlueprintFormat } from '../formats/blueprint'
 import KeyframeEasingsPopupSvelte from '../svelteComponents/keyframeEasingsPopup.svelte'
-import { isFirstKeyframe } from './keyframeEasings'
+import { isFirstKeyframe } from '../panels/easings/easings.svelte'
 
 // blockbench-anim-ux (= sibling plugin) が公開する optional API。
 // 居ない場合は素の document.addEventListener にフォールバックする。

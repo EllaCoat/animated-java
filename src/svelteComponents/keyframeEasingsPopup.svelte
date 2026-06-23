@@ -1,6 +1,6 @@
 <script lang="ts" module>
 	import { onMount } from 'svelte'
-	import KeyframeEasings from './keyframeEasings.svelte'
+	import KeyframeEasings from '../panels/easings/easings.svelte'
 
 	function readAxis(kf: _Keyframe, axis: 'x' | 'y' | 'z'): { value: number | null; raw: string } {
 		const raw = String(kf.get(axis) ?? '')
