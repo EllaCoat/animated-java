@@ -1,5 +1,5 @@
 <script lang="ts" module>
-	import { onMount } from 'svelte'
+	import { onDestroy, onMount } from 'svelte'
 	import KeyframeEasings from '../panels/easings/easings.svelte'
 
 	function readAxis(kf: _Keyframe, axis: 'x' | 'y' | 'z'): { value: number | null; raw: string } {
@@ -37,7 +37,8 @@
 	let yEditable: boolean = $state(true)
 	let zEditable: boolean = $state(true)
 
-	// focus 中の 1 session を 1 Undo step に集約
+	// popup 単位で 1 Undo step に集約 (= XYZ + easing 操作を「Change keyframe values」 1 step に)
+	// reviewer 指摘 B1/Q-1/B9 対応 : ボタン押下 (= input 未 focus) でも edit 開始 → onDestroy で必ず finish
 	let editStarted = false
 
 	onMount(() => {
@@ -65,11 +66,20 @@
 		Animator.preview()
 	}
 
-	function finishAxis(axis: 'x' | 'y' | 'z'): void {
+	// label を axis 別から popup 単位に集約 (= B9 解消)。 blur で確定 + 再入力時は再度 ensureEditStart で
+	// 新規 step として initEdit を切る (= 連続編集は複数 Undo step だが各 step が完結する設計)。
+	function finishEditIfStarted(): void {
 		if (!editStarted) return
-		Undo.finishEdit(`Change keyframe ${axis.toUpperCase()}`)
+		Undo.finishEdit('Change keyframe values')
 		editStarted = false
 	}
+
+	// popup unmount 時 (= マウス離れて scheduleHide 後の destroyPopup) のフォールバック。
+	// ボタン押下中に focus を奪わない設計のため、 blur が発火しない経路がある (= reviewer 指摘 B1)。
+	// editStarted=true で残ったままだと Undo history が破損するので必ず finish する。
+	onDestroy(() => {
+		finishEditIfStarted()
+	})
 
 	function readValue(axis: 'x' | 'y' | 'z'): number {
 		const raw = axis === 'x' ? xValue : axis === 'y' ? yValue : zValue
@@ -162,7 +172,7 @@
 									else zValue = v
 									onAxisTextInput(axis as 'x' | 'y' | 'z')
 								}}
-								onblur={() => finishAxis(axis as 'x' | 'y' | 'z')}
+								onblur={finishEditIfStarted}
 								onkeydown={e => onAxisKeyDown(e, axis as 'x' | 'y' | 'z')}
 								onwheel={e => onAxisWheel(e, axis as 'x' | 'y' | 'z')}
 							/>
