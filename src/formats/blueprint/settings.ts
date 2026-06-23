@@ -89,7 +89,9 @@ export const defaultValues: BlueprintSettings = {
 	custom_rig_entity_tags: '',
 	auto_update_rig_orientation: true,
 	use_storage_for_animation: false,
-	use_entity_stacking: true,
+	// MC-272913 (= rotation 精度欠落バグ) を利用するエンティティスタッキングは TSB 用途で不要、 default off で固定。
+	// v1.10.0 公式は true 化したが、 1.20.4 系ではハリボテ + バグ依存実装なので fork 側は false 維持。
+	use_entity_stacking: false,
 
 	// TSB Optimized Export
 	tsb_optimized_export: false,
