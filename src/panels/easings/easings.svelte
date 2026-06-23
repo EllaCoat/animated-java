@@ -37,7 +37,7 @@
 
 	const EASING_MODES = ['in', 'out', 'inout']
 
-	function isFirstKeyframe(kf: _Keyframe) {
+	export function isFirstKeyframe(kf: _Keyframe) {
 		return (
 			kf.animator.keyframes
 				.filter(k => k.channel === kf.channel)
@@ -95,49 +95,74 @@
 </script>
 
 <script lang="ts">
-	let selectedKeyframe = $state<_Keyframe | undefined>()
+	// props 指定時 = popup embed mode (= 単一 keyframe 編集)、 未指定時 = panel mode (= Timeline.selected 連動)
+	interface Props {
+		selectedKeyframe?: _Keyframe
+	}
+	let { selectedKeyframe: propKeyframe }: Props = $props()
+	const isPanel = $derived(propKeyframe === undefined)
+
+	let internalKeyframe = $state<_Keyframe | undefined>()
+	const selectedKeyframe = $derived(propKeyframe ?? internalKeyframe)
+
 	let easingType = $state('linear')
 	let easingMode: string | undefined = $state()
 	let easingArg: number | undefined = $state()
 	let easingFunction = $derived(getEasingFunctionName(easingType, easingMode))
 
-	const onKeyframeSelectionUpdate = () => {
-		selectedKeyframe = Timeline.selected.at(0)
-		if (!selectedKeyframe) {
+	function syncFromKeyframe(kf: _Keyframe | undefined) {
+		if (!kf) {
 			easingType = 'linear'
 			easingMode = undefined
 			easingArg = undefined
 			return
 		}
-		const { type, mode, arg } = getKeyframeEasing(selectedKeyframe)
+		const { type, mode, arg } = getKeyframeEasing(kf)
 		easingType = type
 		easingMode = mode
 		easingArg = arg ?? getEasingArgDefault(getEasingFunctionName(type, mode))
 	}
 
+	const onKeyframeSelectionUpdate = () => {
+		internalKeyframe = Timeline.selected.at(0)
+		syncFromKeyframe(internalKeyframe)
+	}
+
 	onMount(() => {
-		Blockbench.on('update_keyframe_selection', onKeyframeSelectionUpdate)
+		if (isPanel) {
+			Blockbench.on('update_keyframe_selection', onKeyframeSelectionUpdate)
+			syncFromKeyframe(Timeline.selected.at(0))
+		} else {
+			syncFromKeyframe(propKeyframe)
+		}
 	})
 
 	onDestroy(() => {
-		Blockbench.removeListener('update_keyframe_selection', onKeyframeSelectionUpdate)
+		if (isPanel) {
+			Blockbench.removeListener('update_keyframe_selection', onKeyframeSelectionUpdate)
+		}
 	})
 
 	function makeChange() {
-		console.log('Changing easing to', easingType, easingMode, easingArg)
-		Undo.initEdit({ keyframes: [...Timeline.selected] })
-		for (const kf of Timeline.selected) {
+		// popup mode = props 指定 keyframe 1 個のみ、 panel mode = Timeline.selected 全件
+		const targets = isPanel
+			? [...Timeline.selected]
+			: propKeyframe
+				? [propKeyframe]
+				: []
+		if (targets.length === 0) return
+		Undo.initEdit({ keyframes: targets })
+		for (const kf of targets) {
 			setKeyframeEasing(kf, easingType, easingMode)
 			setKeyframeEasingArg(kf, easingArg)
 		}
-		Undo.finishEdit('Change keyframe easing', { keyframes: [...Timeline.selected] })
+		Undo.finishEdit('Change keyframe easing', { keyframes: targets })
 
 		Animator.preview()
 	}
 </script>
 
-{#key selectedKeyframe}
-	{#if selectedKeyframe === undefined}
+{#if selectedKeyframe === undefined}
 		<div class="message">
 			{@html localize('no_keyframe_selected')}
 		</div>
@@ -155,8 +180,7 @@
 			>
 				{localize('easing_type.title')}
 			</label>
-			{#key easingType}
-				<div id="easing_type_input" class="easing-container">
+			<div id="easing_type_input" class="easing-container">
 					{#each EASING_TYPES as ease}
 						<button
 							class="easing-type"
@@ -177,7 +201,6 @@
 						</button>
 					{/each}
 				</div>
-			{/key}
 		</div>
 		{#if selectedKeyframe.easing !== 'linear'}
 			<div class="bar flex bar-flex-fix">
@@ -189,8 +212,7 @@
 				>
 					{localize('easing_mode.title')}
 				</label>
-				{#key easingFunction}
-					<div id="easing_mode_input" class="easing-container">
+				<div id="easing_mode_input" class="easing-container">
 						{#each EASING_MODES as mode}
 							<button
 								class="easing-type"
@@ -208,7 +230,6 @@
 							</button>
 						{/each}
 					</div>
-				{/key}
 			</div>
 		{/if}
 		{#if hasArgs(easingFunction)}
@@ -238,7 +259,6 @@
 			{@html localize('nonlinear_interpolation')}
 		</div>
 	{/if}
-{/key}
 
 <style>
 	.message {
