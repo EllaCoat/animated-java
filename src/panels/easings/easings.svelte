@@ -100,8 +100,9 @@
 		selectedKeyframe?: _Keyframe
 	}
 	let { selectedKeyframe: propKeyframe }: Props = $props()
-	// $derived だと onMount snapshot とズレうるので const で固定。 popup mount 時 props 固定前提。
-	const isPanel = propKeyframe === undefined
+	// popup mount 時に propKeyframe は固定なので、 mount 後に runtime 再評価されても値は不変 = $derived で OK。
+	// const 化を試したが svelte-patching-tools が state_referenced_locally 警告を出すため $derived に倒した。
+	const isPanel = $derived(propKeyframe === undefined)
 
 	let internalKeyframe = $state<_Keyframe | undefined>()
 	const selectedKeyframe = $derived(propKeyframe ?? internalKeyframe)

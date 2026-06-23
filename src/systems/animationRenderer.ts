@@ -350,6 +350,8 @@ export function hashAnimations(animations: IRenderedAnimation[]) {
 		hash.update('anim;' + animation.name)
 		hash.update(';' + animation.duration.toString())
 		hash.update(';' + animation.loop_mode)
+		// tsb_priority を mix しないと priority のみ変更時に hash 同一判定で reload-skip 誤判定が起きる
+		hash.update(';' + (animation.tsb_priority ?? 'low'))
 		hash.update(';' + Object.keys(animation.modified_nodes).join(';'))
 		for (const frame of animation.frames) {
 			hash.update(';' + frame.time.toString())
