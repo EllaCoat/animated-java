@@ -1,7 +1,7 @@
 {
 	"type": "module",
 	"name": "animated_java",
-	"title": "Animated Java",
+	"title": "Animated Java (TSB)",
 	"icon": "icon.svg",
 	"description": "Effortlessly craft complex animations for Minecraft: Java Edition",
 	"version": "1.10.0",
