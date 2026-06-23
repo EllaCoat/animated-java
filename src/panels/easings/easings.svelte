@@ -313,8 +313,8 @@
 
 	.bar-flex-fix {
 		display: flex;
-		flex-wrap: wrap;
 		margin-top: 2px;
-		min-height: 32px;
+		/* min-height を撤廃 = Curve buttons が wrap で多段化したとき親行が container 高さに追従、
+		   下の Mode 行と重ならない */
 	}
 </style>

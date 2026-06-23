@@ -9,7 +9,9 @@ export const EASINGS_PANEL = new SveltePanel({
 	id: `animated_java:panel/easings`,
 	name: localize('title'),
 	component: EasingsPanelComponent,
-	expand_button: true,
+	expand_button: false,
+	growable: true,
+	resizable: true,
 	icon: 'timeline',
 	condition: {
 		formats: [BLUEPRINT_FORMAT_ID],
