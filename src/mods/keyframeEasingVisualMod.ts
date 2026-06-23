@@ -110,6 +110,36 @@ function refreshAllKeyframes(): void {
 	}
 }
 
+function findKeyframeByUuid(uuid: string): _Keyframe | undefined {
+	const anim = Animation.selected
+	if (!anim) return undefined
+	for (const animator of Object.values(anim.animators ?? {})) {
+		for (const channel of ['rotation', 'position', 'scale'] as const) {
+			const kfList = (animator as unknown as Record<string, _Keyframe[] | undefined>)[channel]
+			if (!Array.isArray(kfList)) continue
+			for (const kf of kfList) if (kf.uuid === uuid) return kf
+		}
+	}
+	return undefined
+}
+
+// MutationObserver の addedNodes に直接 .keyframe が来るとは限らず、 BB が channel 親要素ごと
+// 再描画した場合は親 element が addedNodes に入る (= reviewer 指摘 B3)。 加えて easing 変更時は
+// UPDATE_KEYFRAME_SELECTION が発火しないため event 経路では visual 更新されない (= reviewer 指摘 B6)。
+// addedNode 自身 + 子孫の .keyframe を再帰探索して個別 applyDataset で attribute 再付与する。
+function syncSubtreeKeyframes(root: Node): void {
+	if (!(root instanceof HTMLElement)) return
+	if (root.classList?.contains('keyframe') && root.id) {
+		const kf = findKeyframeByUuid(root.id)
+		if (kf) applyDataset(kf)
+	}
+	root.querySelectorAll?.<HTMLElement>('.keyframe').forEach(child => {
+		if (!child.id) return
+		const kf = findKeyframeByUuid(child.id)
+		if (kf) applyDataset(kf)
+	})
+}
+
 registerPatch({
 	id: 'animated_java:keyframe-easing-visual',
 
@@ -123,6 +153,16 @@ registerPatch({
 		)
 		const unsubProjectSelect = EVENTS.SELECT_AJ_PROJECT.subscribe(refreshAllKeyframes)
 
+		// BB が keyframe DOM を再描画する経路 (= 親 channel 再描画 / easing 変更 / animation 切替) で
+		// AJ 付与 attribute が消失する問題への補修。 addedNodes 内の .keyframe を子孫含めて再付与する。
+		// document.body 全体 subtree を監視するが、 .keyframe フィルタで処理を限定する。
+		const observer = new MutationObserver(mutations => {
+			for (const m of mutations) {
+				for (const node of m.addedNodes) syncSubtreeKeyframes(node)
+			}
+		})
+		observer.observe(document.body, { childList: true, subtree: true })
+
 		refreshAllKeyframes()
 
 		return {
@@ -130,6 +170,7 @@ registerPatch({
 			curveCssDeletable,
 			unsubKeyframeSelection,
 			unsubProjectSelect,
+			observer,
 		}
 	},
 
@@ -138,7 +179,9 @@ registerPatch({
 		curveCssDeletable,
 		unsubKeyframeSelection,
 		unsubProjectSelect,
+		observer,
 	}) => {
+		observer.disconnect()
 		unsubKeyframeSelection()
 		unsubProjectSelect()
 		baseCssDeletable.delete()
