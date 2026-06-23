@@ -523,7 +523,7 @@ IF (has_animations) {
 									global.lfxVariant = rig.variants[global.lfxLastFrame.variants[0]]
 								%%>
 								execute <%global.lfxLastFrame.variants_execute_condition ? global.lfxLastFrame.variants_execute_condition + ' ' : ''%>run \
-									function <%blueprint_id%>/variants/_apply {variant: "<%global.lfxVariant.storage_name%>"}
+									function <%blueprint_id%>/variants/_apply {variant: "<%global.lfxVariant.name%>"}
 							}
 
 							# root function keyframe (純正 line 525-530 相当)
