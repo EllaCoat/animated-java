@@ -21,7 +21,9 @@ function selectKeyframesInRange(startFrame: number, endFrame: number, fps: numbe
 
 	// 非表示 channel は box-select と同じく Timeline.vue.channels で弾く
 	const channels = (Timeline.vue as any).channels as Record<string, boolean>
-	for (const animator of Timeline.animators) {
+	// action.condition で Animator.open && !!Animation.selected を担保しているが、
+	// プロジェクト切替直後等で Timeline.animators が undefined のエッジケース防御 (= reviewer 指摘 C3)
+	for (const animator of Timeline.animators ?? []) {
 		for (const kf of animator.keyframes as _Keyframe[]) {
 			if (kf.time >= t1 && kf.time <= t2 && channels[kf.channel] !== false) {
 				kf.selected = true
