@@ -11,8 +11,8 @@ BBPlugin.register(PACKAGE.name, {
 	version: PACKAGE.version,
 	min_version: PACKAGE.min_blockbench_version,
 	tags: ['Minecraft: Java Edition', 'Animation', 'Display Entities'],
-	repository: 'https://github.com/animated-java/animated-java',
-	bug_tracker: 'https://github.com/animated-java/animated-java/issues',
+	repository: 'https://github.com/EllaCoat/animated-java',
+	bug_tracker: 'https://github.com/EllaCoat/animated-java/issues',
 	website: 'https://animated-java.dev',
 	await_loading: true,
 	onload() {
