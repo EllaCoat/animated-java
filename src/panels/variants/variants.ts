@@ -2,6 +2,7 @@ import { registerDeletableHandlerPatch } from 'blockbench-patch-manager'
 import { SveltePanel } from 'svelte-patching-tools/blockbench'
 import { openVariantConfigDialog } from '../../dialogs/variantConfig/variantConfig'
 import { BLUEPRINT_FORMAT_ID } from '../../formats/blueprint'
+import EVENTS from '../../util/events'
 import { localize as translate } from '../../util/lang'
 import { Variant } from '../../variants'
 import VariantsPanel from './variants.svelte'
@@ -107,4 +108,11 @@ export const VARIANTS_PANEL = new SveltePanel({
 	},
 	component: VariantsPanel,
 	props: {},
+})
+
+// plugin reload は bundle 全体を再評価し、 module top-level の new SveltePanel が毎回新 instance + 新 DOM を生む
+// (= panels.ts:521-528、 BB Panel コンストラクタは登録のみで cleanup しない)。
+// PLUGIN_UNLOAD で古い panel を delete しないと sidebar 上に同 id panel が累積する。
+EVENTS.PLUGIN_UNLOAD.subscribe(() => {
+	VARIANTS_PANEL.delete()
 })

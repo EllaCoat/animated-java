@@ -1,5 +1,6 @@
 import { SveltePanel } from 'svelte-patching-tools/blockbench'
 import { BLUEPRINT_FORMAT_ID } from '../../formats/blueprint'
+import EVENTS from '../../util/events'
 import { createScopedTranslator } from '../../util/lang'
 import EasingsPanelComponent from './easings.svelte'
 
@@ -34,4 +35,11 @@ export const EASINGS_PANEL = new SveltePanel({
 		sidebar_index: 2,
 	},
 	default_side: 'left',
+})
+
+// plugin reload は bundle 全体を再評価し、 module top-level の new SveltePanel が毎回新 instance + 新 DOM を生む
+// (= panels.ts:521-528、 BB Panel コンストラクタは登録のみで cleanup しない)。
+// PLUGIN_UNLOAD で古い panel を delete しないと sidebar 上に同 id panel が累積する。
+EVENTS.PLUGIN_UNLOAD.subscribe(() => {
+	EASINGS_PANEL.delete()
 })
