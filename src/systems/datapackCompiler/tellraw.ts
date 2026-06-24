@@ -174,7 +174,7 @@ namespace TELLRAW {
 				],
 			},
 			CREATE_TELLRAW_HELP_LINK(
-				'https://animated-java.dev/docs/rigs/controlling-a-rig-instance'
+				'https://animated-java.dev/docs/core-concepts/tags#practical-selector-examples'
 			),
 		])
 	}
