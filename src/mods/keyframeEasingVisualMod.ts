@@ -80,8 +80,21 @@ function parseEasing(easing: string | undefined): { type: string; dir: EasingDir
 	return { type: m[2].toLowerCase(), dir: m[1].toLowerCase() as EasingDir }
 }
 
+// anim_ux v0.6+ が公開する popout 子窓 document。 popout 中は keyframe DOM が子窓側に
+// adoptNode 移植されるため、 親 document の querySelector では見つからない。 attach 中の
+// すべての document を順に探して最初に当たった要素に attribute を当てる。
+let popoutDoc: Document | null = null
+
+function getActiveDocs(): Document[] {
+	return popoutDoc ? [document, popoutDoc] : [document]
+}
+
 function findKeyframeElement(uuid: string): HTMLElement | null {
-	return document.querySelector<HTMLElement>(`.keyframe[id="${uuid}"]`)
+	for (const doc of getActiveDocs()) {
+		const el = doc.querySelector<HTMLElement>(`.keyframe[id="${uuid}"]`)
+		if (el) return el
+	}
+	return null
 }
 
 function applyDataset(kf: _Keyframe): void {
@@ -140,6 +153,64 @@ function syncSubtreeKeyframes(root: Node): void {
 	})
 }
 
+// popout 子窓 document への CSS + MutationObserver attach 状態。 同時に複数子窓を想定しない
+// (= anim_ux は同時 1 子窓のみ) ため単一 slot で管理。
+interface PopoutAttach {
+	doc: Document
+	baseStyle: HTMLStyleElement
+	curveStyle: HTMLStyleElement
+	observer: MutationObserver
+}
+let popoutAttach: PopoutAttach | null = null
+
+function attachPopoutDoc(doc: Document): void {
+	if (popoutAttach?.doc === doc) return
+	if (popoutAttach) detachPopoutDoc()
+	// CSS は親 head 経由 (Blockbench.addCSS) では popout 子窓に伝播しないので、
+	// 子窓 head に直接 <style> を inject する。 親側は別途 Blockbench.addCSS で済んでいる。
+	const baseStyle = doc.createElement('style')
+	baseStyle.textContent = BASE_CSS
+	doc.head.appendChild(baseStyle)
+	const curveStyle = doc.createElement('style')
+	curveStyle.textContent = buildCurveCss()
+	doc.head.appendChild(curveStyle)
+	const observer = new MutationObserver(mutations => {
+		for (const m of mutations) {
+			for (const node of m.addedNodes) syncSubtreeKeyframes(node)
+		}
+	})
+	observer.observe(doc.body, { childList: true, subtree: true })
+	popoutAttach = { doc, baseStyle, curveStyle, observer }
+	popoutDoc = doc
+	// popout 開いた瞬間に既に居る keyframe (= adoptNode 直後の DOM) を即時 sync
+	refreshAllKeyframes()
+}
+
+function detachPopoutDoc(): void {
+	if (!popoutAttach) return
+	popoutAttach.observer.disconnect()
+	try {
+		popoutAttach.baseStyle.remove()
+	} catch {
+		/* noop */
+	}
+	try {
+		popoutAttach.curveStyle.remove()
+	} catch {
+		/* noop */
+	}
+	popoutAttach = null
+	popoutDoc = null
+}
+
+interface AnimUxAPI {
+	getActivePopoutDocument(): Document | null
+}
+
+interface PopoutEventDetail {
+	document: Document
+}
+
 registerPatch({
 	id: 'animated_java:keyframe-easing-visual',
 
@@ -163,6 +234,26 @@ registerPatch({
 		})
 		observer.observe(document.body, { childList: true, subtree: true })
 
+		// anim_ux v0.6+ の popout event を listen。 popout 子窓には CSS / MutationObserver / dataset
+		// を別途 attach しないと easing の色変更と背景カーブが反映されない (= 親 document 経路は伝播しない)。
+		const onPopoutOpen = (e: Event): void => {
+			const detail = (e as CustomEvent<PopoutEventDetail>).detail
+			if (detail?.document) attachPopoutDoc(detail.document)
+		}
+		const onPopoutClose = (): void => {
+			detachPopoutDoc()
+			// popout 閉じた直後、 keyframe DOM が親 document に戻った後の再 sync
+			refreshAllKeyframes()
+		}
+		window.addEventListener('animux:popout-open', onPopoutOpen)
+		window.addEventListener('animux:popout-close', onPopoutClose)
+
+		// plugin 順序依存の安全弁 = AJ load 時点で既に popout 中の場合は event 来ない、
+		// anim_ux API 経由で現在状態を直接拾う。
+		const animux = (window as unknown as { AnimUX?: AnimUxAPI }).AnimUX
+		const existing = animux?.getActivePopoutDocument?.()
+		if (existing) attachPopoutDoc(existing)
+
 		refreshAllKeyframes()
 
 		return {
@@ -171,6 +262,8 @@ registerPatch({
 			unsubKeyframeSelection,
 			unsubProjectSelect,
 			observer,
+			onPopoutOpen,
+			onPopoutClose,
 		}
 	},
 
@@ -180,7 +273,12 @@ registerPatch({
 		unsubKeyframeSelection,
 		unsubProjectSelect,
 		observer,
+		onPopoutOpen,
+		onPopoutClose,
 	}) => {
+		window.removeEventListener('animux:popout-open', onPopoutOpen)
+		window.removeEventListener('animux:popout-close', onPopoutClose)
+		detachPopoutDoc()
 		observer.disconnect()
 		unsubKeyframeSelection()
 		unsubProjectSelect()
