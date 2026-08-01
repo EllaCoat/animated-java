@@ -260,7 +260,7 @@ export async function wrapJsonText(jsonText: TextComponent, maxLineWidth = 200) 
 	let backgroundWidth = 0
 	let currentLine: Line = { words: [], width: 0 }
 	for (const word of words) {
-		const wordWidth = await font.getWordWidth(word)
+		let wordWidth = await font.getWordWidth(word)
 		const wordStyles = [...word.styles]
 
 		// If the word is longer than than the max line width, split it into multiple lines
@@ -352,7 +352,11 @@ export async function wrapJsonText(jsonText: TextComponent, maxLineWidth = 200) 
 					span.start = Math.max(0, span.start - 1)
 					span.end = Math.max(0, span.end - 1)
 				})
-				// word.width = await font.getWordWidth(word)
+				// 空白を削除した分だけ単語が縮むので、幅を計算し直す。
+				// 削除した空白の幅を引くのではなく getWordWidth を再実行することで、
+				// span ごとのフォント / 装飾 (bold 等) の解決を最初の計算と完全に一致させる。
+				// 再計算した幅は、この後の word.width / currentLine.width にそのまま使われる。
+				wordWidth = await font.getWordWidth(word)
 			}
 			lines.push(currentLine)
 			backgroundWidth = Math.max(backgroundWidth, currentLine.width)
