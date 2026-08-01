@@ -7,6 +7,7 @@ import {
 	OPEN_DOCUMENTATION,
 } from '../../interface/animatedJavaBarItem'
 import { updateAllCubeOutlines } from '../../mods/cube'
+import { TextDisplay } from '../../outliner/textDisplay'
 import { VanillaBlockDisplay } from '../../outliner/vanillaBlockDisplay'
 import { VanillaItemDisplay } from '../../outliner/vanillaItemDisplay'
 import { createScopedTranslator } from '../../util/lang'
@@ -94,7 +95,7 @@ export function openBlueprintSettings() {
 		onClose: () => {
 			VanillaBlockDisplay.forceUpdateAll()
 			VanillaItemDisplay.forceUpdateAll()
-			VanillaItemDisplay.forceUpdateAll()
+			TextDisplay.forceUpdateAll()
 			updateRotationConstraints()
 			updateAllCubeOutlines()
 			Canvas.updateAll()
