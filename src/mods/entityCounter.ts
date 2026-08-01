@@ -22,7 +22,9 @@ export function getEntityCounts() {
 
 	const cameraEntities = OutlinerElement.types.camera
 		? // @ts-expect-error - Camera class isn't typed as a class.
-			OutlinerElement.types.camera.all.length
+			(OutlinerElement.types.camera.all as Array<{ export: boolean }>).filter(
+				camera => camera.export
+			).length
 		: 0
 
 	const interactionEntities = Interaction.all.filter(interaction => interaction.export).length
