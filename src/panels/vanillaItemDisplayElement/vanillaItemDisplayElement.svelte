@@ -32,10 +32,14 @@
 	$effect(() => {
 		const thisSelected = selected
 		const thisItem = item
+		// validation は非同期なので、 完了順が入力順と一致する保証がない。
+		// capture 時点の selection / 入力が現在値と一致しない結果は、 古い結果として破棄する。
+		const isStale = () => selected !== thisSelected || item !== thisItem
 		error?.set('')
 		if (thisSelected && thisItem && thisSelected.item !== thisItem) {
 			void validateItem(thisItem)
 				.then(err => {
+					if (isStale()) return
 					if (err) {
 						error?.set(err)
 						console.log('Item validation error:', err)
@@ -52,6 +56,7 @@
 					})
 				})
 				.catch(err => {
+					if (isStale()) return
 					error?.set(err.message)
 				})
 		}

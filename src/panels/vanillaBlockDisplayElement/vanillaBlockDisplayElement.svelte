@@ -26,10 +26,14 @@
 	$effect(() => {
 		const thisSelected = selected
 		const thisBlock = block
+		// validation は非同期なので、 完了順が入力順と一致する保証がない。
+		// capture 時点の selection / 入力が現在値と一致しない結果は、 古い結果として破棄する。
+		const isStale = () => selected !== thisSelected || block !== thisBlock
 		error?.set('')
 		if (thisSelected && thisBlock && thisSelected.block !== thisBlock) {
 			void validateBlock(thisBlock)
 				.then(err => {
+					if (isStale()) return
 					if (err) {
 						error?.set(err)
 						console.log('Block validation error:', err)
@@ -46,6 +50,7 @@
 					})
 				})
 				.catch(err => {
+					if (isStale()) return
 					error?.set(err.message)
 				})
 		}
