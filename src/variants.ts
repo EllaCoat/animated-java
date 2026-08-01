@@ -154,6 +154,7 @@ export class Variant {
 		variant.generateNameFromDisplayName = this.generateNameFromDisplayName
 		variant.textureMap = this.textureMap.copy()
 		variant.excludedNodes = this.excludedNodes.map(item => ({ ...item }))
+		variant.onApplyFunction = this.onApplyFunction
 		variant.select()
 	}
 
@@ -164,6 +165,9 @@ export class Variant {
 	static fromJSON(json: IBlueprintVariantJSON, isDefault = false): Variant {
 		const variant = new Variant(json.display_name, isDefault)
 		variant.uuid = json.uuid
+		// on_apply_function は default variant でも設定できる (= UI 側でも出している) ため、
+		// texture map / excluded nodes をスキップする early return よりも前で復元する
+		variant.onApplyFunction = json.on_apply_function
 		if (json.is_default) {
 			return variant
 		}
@@ -176,7 +180,6 @@ export class Variant {
 				return group ? { name: group.name, value: uuid } : undefined
 			})
 			.filter(Boolean) as CollectionItem[]
-		variant.onApplyFunction = json.on_apply_function
 		return variant
 	}
 
