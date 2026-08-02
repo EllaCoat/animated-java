@@ -145,7 +145,9 @@ function on_load {
 		# variant 関連を一切出力しない構成では上の `set value` が出ないため、 旧 export の
 		# `d.variants` が storage に残り続ける。 TSB 経路は on_load で cleanup を呼ばない
 		# 方針なので、 この経路だけは明示的に remove する。
-		data remove storage <%project_storage.replace(':', '.')%>:meta d.variants
+		# 不在時の `data remove` は ERROR_MERGE_UNCHANGED を投げる (= 初回 load で毎回踏む) ため、
+		# 存在確認を挟む。
+		execute if data storage <%project_storage.replace(':', '.')%>:meta d.variants run data remove storage <%project_storage.replace(':', '.')%>:meta d.variants
 	}
 }
 
