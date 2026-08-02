@@ -98,40 +98,46 @@
 </script>
 
 <div class="dialog-container">
-	<LineInput
-		label={translate('dialog.variant_config.variant_display_name')}
-		bind:value={displayName}
-		tooltip={translate('dialog.variant_config.variant_display_name.description')}
-		defaultValue={'New Variant'}
-	/>
-
-	{#key $name}
-		{#if $generateNameFromDisplayName}
-			<LineInput
-				label={translate('dialog.variant_config.variant_name')}
-				bind:value={name}
-				tooltip={translate('dialog.variant_config.variant_name.description')}
-				disabled
-				defaultValue={'new_variant'}
-			/>
-		{:else}
-			<LineInput
-				label={translate('dialog.variant_config.variant_name')}
-				bind:value={name}
-				tooltip={translate('dialog.variant_config.variant_name.description')}
-				defaultValue={'new_variant'}
-			/>
-		{/if}
-	{/key}
-
-	<Checkbox
-		label={translate('dialog.variant_config.generate_name_from_display_name')}
-		bind:checked={generateNameFromDisplayName}
-		tooltip={translate('dialog.variant_config.generate_name_from_display_name.description')}
-		defaultValue={true}
-	/>
-
+	<!--
+		default Variant は素のモデルそのものを表す基準状態なので、 texture map と excluded nodes は
+		定義上意味を持たない。 名前も Variant の constructor / fromJSON が 'Default' / 'default' に
+		強制するため編集させない (= 編集しても再読み込みで元に戻る)。 default で編集できるのは
+		On-Apply Function のみ。
+	-->
 	{#if !variant.isDefault}
+		<LineInput
+			label={translate('dialog.variant_config.variant_display_name')}
+			bind:value={displayName}
+			tooltip={translate('dialog.variant_config.variant_display_name.description')}
+			defaultValue={'New Variant'}
+		/>
+
+		{#key $name}
+			{#if $generateNameFromDisplayName}
+				<LineInput
+					label={translate('dialog.variant_config.variant_name')}
+					bind:value={name}
+					tooltip={translate('dialog.variant_config.variant_name.description')}
+					disabled
+					defaultValue={'new_variant'}
+				/>
+			{:else}
+				<LineInput
+					label={translate('dialog.variant_config.variant_name')}
+					bind:value={name}
+					tooltip={translate('dialog.variant_config.variant_name.description')}
+					defaultValue={'new_variant'}
+				/>
+			{/if}
+		{/key}
+
+		<Checkbox
+			label={translate('dialog.variant_config.generate_name_from_display_name')}
+			bind:checked={generateNameFromDisplayName}
+			tooltip={translate('dialog.variant_config.generate_name_from_display_name.description')}
+			defaultValue={true}
+		/>
+
 		<div class="toolbar" style="margin: 8px 0;">
 			<div>
 				{translate('dialog.variant_config.texture_map.title')}

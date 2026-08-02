@@ -56,7 +56,10 @@ export const OPEN_VARIANT_CONFIG_ACTION = registerDeletableHandlerPatch({
 		return new Blockbench.Action(`animated_java:action/open-variant-config`, {
 			name: translate('action.variants.open_config'),
 			icon: 'settings',
-			condition: () => !!Variant.selected && !Variant.selected.isDefault,
+			// default Variant も On-Apply Function を持てるので config dialog は開けるようにする。
+			// default で意味を持たない項目 (texture map / excluded nodes / 名前) は
+			// variantConfig.svelte 側の `{#if !variant.isDefault}` で非表示にしている。
+			condition: () => !!Variant.selected,
 			click() {
 				if (!Variant.selected) return
 				openVariantConfigDialog(Variant.selected)
