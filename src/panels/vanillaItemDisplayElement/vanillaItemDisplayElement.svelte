@@ -1,64 +1,113 @@
 <script lang="ts" module>
+	import { onDestroy } from 'svelte'
 	import { VanillaItemDisplay } from '../../outliner/vanillaItemDisplay'
+	import EVENTS from '../../util/events'
 	import { localize as translate } from '../../util/lang'
-	import { validateItem } from '../../util/minecraftUtil'
-	import { ITEM_DISPLAY_ITEM_DISPLAY_SELECT } from './vanillaItemDisplayElement'
+	import {
+		ITEM_DISPLAY_ITEM_DISPLAY_SELECT,
+		updateItemDisplaySelect,
+	} from './vanillaItemDisplayElement'
 </script>
 
 <script lang="ts">
-	export let selected: VanillaItemDisplay
+	import { validateItem } from '../../util/minecraftUtil'
 
-	let item = selected.item
-	let error = selected.error
+	let selected = $state(VanillaItemDisplay.selected.at(0))
+	let item = $derived(selected?.item)
+	let error = $derived(selected?.error)
 
-	ITEM_DISPLAY_ITEM_DISPLAY_SELECT.set(selected.itemDisplay)
+	// 非同期 validation の世代番号。 in-flight の validation 結果が今も有効かを判定する。
+	// $state ではなく素の let にしている (= effect の依存にすると再実行が無限ループする)。
+	let validationGeneration = 0
+	const invalidatePendingValidation = () => {
+		validationGeneration++
+	}
 
-	$: {
-		$error = ''
-		if (selected.item !== item) {
-			void validateItem(item)
+	const onSelectionChanged = () => {
+		// $effect は同期実行されないため、 effect cleanup による無効化だけでは
+		// この同期ハンドラから effect 再実行までの間に完了した結果がすり抜ける。
+		// selection が変わった時点で同期的に世代を進めて、 その窓を塞ぐ。
+		invalidatePendingValidation()
+		selected = VanillaItemDisplay.selected.at(0)
+		item = selected?.item
+		error = selected?.error
+		updateItemDisplaySelect()
+	}
+
+	const unsubs = [
+		EVENTS.UNDO.subscribe(onSelectionChanged),
+		EVENTS.REDO.subscribe(onSelectionChanged),
+		EVENTS.UPDATE_SELECTION.subscribe(onSelectionChanged),
+	]
+
+	$effect(() => {
+		const thisSelected = selected
+		const thisItem = item
+		const thisGeneration = validationGeneration
+		// validation は非同期なので、 完了順が入力順と一致する保証がない。 以下のいずれかを満たす結果は破棄する。
+		// - 世代不一致 = effect の再実行 / component の破棄 / selection の変更 が起きた後の結果。
+		//   値の比較では判定できない A→B→A の往復と、 local state が変化しない破棄をここで弾く。
+		// - 値不一致 = effect が再実行される前に bind:value 経由で入力が変わった (= effect 遅延実行の窓)。
+		const isStale = () =>
+			validationGeneration !== thisGeneration ||
+			selected !== thisSelected ||
+			item !== thisItem
+		error?.set('')
+		if (thisSelected && thisItem && thisSelected.item !== thisItem) {
+			void validateItem(thisItem)
 				.then(err => {
+					if (isStale()) return
 					if (err) {
-						$error = err
+						error?.set(err)
 						console.log('Item validation error:', err)
 						return
 					}
-					console.log('Changing item to', item)
-					Undo.initEdit({ elements: [selected] })
+					console.log('Changing item to', thisItem)
+					Undo.initEdit({ elements: [thisSelected] })
 
-					selected.item = item
+					thisSelected.item = thisItem
 					Project!.saved = false
 
-					Undo.finishEdit(`Change Item Display Item to "${item}"`, {
-						elements: [selected],
+					Undo.finishEdit(`Change Item Display Item to "${thisItem}"`, {
+						elements: [thisSelected],
 					})
 				})
 				.catch(err => {
-					$error = err.message
+					if (isStale()) return
+					error?.set(err.message)
 				})
 		}
-	}
+
+		// effect の再実行時と component の破棄時に走る。 この run が起動した validation を無効化する。
+		return invalidatePendingValidation
+	})
 
 	const mountItemDisplaySelect = (node: HTMLDivElement) => {
 		node.appendChild(ITEM_DISPLAY_ITEM_DISPLAY_SELECT.node)
 	}
+
+	onDestroy(() => {
+		unsubs.forEach(u => u())
+	})
 </script>
 
-<p class="panel_toolbar_label label">
-	{translate('panel.vanilla_item_display.title')}
-</p>
+{#if selected}
+	<p class="panel_toolbar_label label">
+		{translate('panel.vanilla_item_display.title')}
+	</p>
 
-<div class="toolbar custom-toolbar" title={translate('panel.vanilla_item_display.description')}>
-	<div class="content" style="width: 95%;">
-		<input type="text" bind:value={item} />
+	<div class="toolbar custom-toolbar" title={translate('panel.vanilla_item_display.description')}>
+		<div class="content" style="width: 95%;">
+			<input type="text" bind:value={item} />
+		</div>
+		<div class="content" use:mountItemDisplaySelect></div>
 	</div>
-	<div class="content" use:mountItemDisplaySelect></div>
-</div>
 
-{#if $error}
-	<div class="error">
-		{$error}
-	</div>
+	{#if $error}
+		<div class="error">
+			{$error}
+		</div>
+	{/if}
 {/if}
 
 <style>

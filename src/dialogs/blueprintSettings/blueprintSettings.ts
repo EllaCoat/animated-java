@@ -7,6 +7,9 @@ import {
 	OPEN_DOCUMENTATION,
 } from '../../interface/animatedJavaBarItem'
 import { updateAllCubeOutlines } from '../../mods/cube'
+import { TextDisplay } from '../../outliner/textDisplay'
+import { VanillaBlockDisplay } from '../../outliner/vanillaBlockDisplay'
+import { VanillaItemDisplay } from '../../outliner/vanillaItemDisplay'
 import { createScopedTranslator } from '../../util/lang'
 import FooterComponent from './footer.svelte'
 import DatapackComponent from './pages/datapack.svelte'
@@ -90,6 +93,9 @@ export function openBlueprintSettings() {
 		disableKeybinds: true,
 		buttons: [tl('dialog.close')],
 		onClose: () => {
+			VanillaBlockDisplay.forceUpdateAll()
+			VanillaItemDisplay.forceUpdateAll()
+			TextDisplay.forceUpdateAll()
 			updateRotationConstraints()
 			updateAllCubeOutlines()
 			Canvas.updateAll()
