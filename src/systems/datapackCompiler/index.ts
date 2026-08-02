@@ -566,6 +566,18 @@ const dataPackCompiler: DataPackCompiler = async ({
 		.map(() => '..')
 		.join('/')
 
+	// variant 関連の関数と metadata を出力する必要があるか。
+	// rig.variants には default が常に含まれるので length > 1 は「カスタム variant あり」の意味。
+	// default のみでも root On-Apply Function や variant keyframe があれば variants/ が要る。
+	const hasCustomVariants = Object.keys(rig.variants).length > 1
+	const hasVariantOnApply = Object.values(rig.variants).some(v =>
+		Boolean(v.on_apply_function?.trim())
+	)
+	const hasVariantKeyframes = animations.some(a =>
+		a.frames.some(f => (f.variants?.length ?? 0) > 0)
+	)
+	const needsVariantFunctions = hasCustomVariants || hasVariantOnApply || hasVariantKeyframes
+
 	const variables = {
 		relativePathToSrc,
 		blueprint_id: aj.blueprint_id,
@@ -631,6 +643,7 @@ const dataPackCompiler: DataPackCompiler = async ({
 				.length > 0,
 		has_cameras: Object.values(rig.nodes).filter(n => n.type === 'camera').length > 0,
 		has_animations: animations.length > 0,
+		needs_variant_functions: needsVariantFunctions,
 		getNodeTags,
 		BONE_TYPES,
 		project_storage: `${aj.blueprint_id}`,

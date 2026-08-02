@@ -2,6 +2,7 @@ import { Compiler, VariableMap } from 'mc-build/mcl/Compiler'
 import { Parser } from 'mc-build/mcl/Parser'
 import { TemplateRegisterer } from 'mc-build/mcl/TemplateRegisterer'
 import { Tokenizer } from 'mc-build/mcl/TokenizerImpl'
+import * as NodePath from 'node:path'
 import { getMisodeVersion } from '../minecraft/versionManager'
 import type { ExportedFile } from '../util'
 
@@ -11,6 +12,16 @@ interface CompilerOptions {
 	variables: Record<string, any>
 	version: string
 	exportedFiles: Map<string, ExportedFile>
+	/**
+	 * Data Pack format version. 省略時は `version` から misode の版数データを取得する。
+	 * headless なテストからはネットワークアクセスを避けるため明示的に渡す。
+	 */
+	formatVersion?: number
+	/**
+	 * 進捗ログを抑制する。 テストで `variables` 全体が毎回 dump されるのを避けるために使う
+	 * (rig / animations を含むため 1 回で数百 KB になる)。
+	 */
+	quiet?: boolean
 }
 
 export async function compileMcbProject({
@@ -19,13 +30,18 @@ export async function compileMcbProject({
 	variables,
 	version,
 	exportedFiles,
+	formatVersion,
+	quiet = false,
 }: CompilerOptions) {
-	console.group('Compiling', sourceFiles)
-	console.log('Variables:', variables)
+	if (!quiet) {
+		console.group('Compiling', sourceFiles)
+		console.log('Variables:', variables)
+	}
 
 	TemplateRegisterer.register()
 
-	const misodeVersionData = await getMisodeVersion(version)
+	const resolvedFormatVersion =
+		formatVersion ?? (await getMisodeVersion(version)).data_pack_version
 
 	const compiler = new Compiler('src', {
 		libDir: null,
@@ -37,7 +53,7 @@ export async function compileMcbProject({
 		ioThreadCount: null,
 		dontEmitComments: true,
 		setup: null,
-		formatVersion: misodeVersionData.data_pack_version,
+		formatVersion: resolvedFormatVersion,
 	})
 	compiler.disableRequire = true
 
@@ -45,7 +61,7 @@ export async function compileMcbProject({
 		cleanup: () => undefined,
 		finished: () => true,
 		write: (localPath, content) => {
-			const writePath = PathModule.join(destPath, localPath)
+			const writePath = NodePath.join(destPath, localPath)
 			exportedFiles.set(writePath, {
 				content,
 				includeInAJMeta: true,
@@ -53,7 +69,7 @@ export async function compileMcbProject({
 		},
 	}
 
-	console.time('MC-Build compiled in')
+	if (!quiet) console.time('MC-Build compiled in')
 
 	const mcbTemplateFiles = Object.entries(sourceFiles).filter(([path]) => path.endsWith('.mcbt'))
 	const mcbFiles = Object.entries(sourceFiles).filter(([path]) => path.endsWith('.mcb'))
@@ -77,9 +93,11 @@ export async function compileMcbProject({
 	}
 
 	compiler.compile(VariableMap.fromObject(variables))
-	console.timeEnd('MC-Build compiled in')
-	console.log('Exported files:', exportedFiles.keys())
-	console.groupEnd()
+	if (!quiet) {
+		console.timeEnd('MC-Build compiled in')
+		console.log('Exported files:', exportedFiles.keys())
+		console.groupEnd()
+	}
 
 	return exportedFiles
 }

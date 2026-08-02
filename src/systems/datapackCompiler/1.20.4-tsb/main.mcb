@@ -78,17 +78,30 @@ function on_load {
 			}
 		%%>
 
-		# Phase C 案 V : variant 適用テーブルを on_load で同期書き込み (サイズ < 1KB)。
-		# `aj.<bp>:meta d.variants.<variant>.<bone_id>` = `{cmd?: int, cfg?: compound}`、 影響しない
-		# bone は path 不在 = no-op。 cleanup の `d` 配下 remove で消えるので残骸残りなし。
-		# 加えて root On-Apply Function を持つ variant には `on_apply:1b` を並べる
-		# (= `variants/_apply` の dispatch ガード、 詳細は variants/_apply 側のコメント)。
+		# TSB Optimized Export : animation_hash 判定で reload 時のキュー再構築をスキップ。
+		# 同一値の set value は throw + success 0 になる仕様
+		# (`DataCommands.java::ERROR_MERGE_UNCHANGED`) を利用、 hash 変化時のみ init_queue。
+		# 部分展開中 reload は hash 一致でスキップされるが、 残った queue は global tick の
+		# load_dispatch_step が引き続き処理するため最終的に完全展開される。
+		# datapack 入れ替え時の旧 storage 残骸は許容 (主に同じ cell の上書きで除去、
+		# 一部 unreferenced cell は残るが運用上問題なし)。
+		# 詳細 : docs/tsb-known-issues/reload-skip-on-hash-match.md
+		execute store success score #h <%OBJECTIVES.I()%> run data modify storage <%project_storage.replace(':', '.')%>:state d.animation_hash set value "<%animation_hash%>"
+		execute if score #h <%OBJECTIVES.I()%> matches 1 run function <%blueprint_id%>/load/init_queue
+	}
+
+	# Phase C 案 V : variant 適用テーブルを on_load で同期書き込み (サイズ < 1KB)。
+	# `aj.<bp>:meta d.variants.<variant>.<bone_id>` = `{cmd?: int, cfg?: compound}`、 影響しない
+	# bone は path 不在 = no-op。 TSB 経路は on_load で cleanup を呼ばないため、 残骸は
+	# 下の `set value` による毎回の上書きで潰す (= gate が false の経路だけ remove が要る)。
+	# 加えて root On-Apply Function を持つ variant には `on_apply:1b` を並べる
+	# (= `variants/_apply` の dispatch ガード、 詳細は variants/_apply 側のコメント)。
+	# animation の有無とは独立に必要なので `needs_variant_functions` で判定する
+	# (= animation 0 個の blueprint でも variants/_apply の dispatch 条件を成立させる)。
+	IF (tsb_optimized_export && needs_variant_functions) {
 		<%%
 			if (Object.keys(rig.variants).length > 0) {
 				const filteredBones = Object.values(rig.nodes).filter(n => BONE_TYPES.includes(n.type))
-				// variant が 1 個だけの blueprint では variants dir 自体を生成しないので、
-				// on_apply フラグも書かない (= 読む側が存在しない)。
-				const emitOnApplyFlag = Object.keys(rig.variants).length > 1
 				const variantParts = []
 				for (const variant of Object.values(rig.variants)) {
 					const bonePartsList = []
@@ -119,26 +132,22 @@ function on_load {
 						bonePartsList.push(`"${i}":{${parts.join(',')}}`)
 					})
 					// on_apply フラグは bone key と同じ compound に並べる (bone key は数値文字列なので衝突しない)。
-					if (emitOnApplyFlag && variant.on_apply_function) bonePartsList.push('on_apply:1b')
+					if (variant.on_apply_function) bonePartsList.push('on_apply:1b')
 					if (bonePartsList.length === 0) continue
 					variantParts.push(`${variant.name}:{${bonePartsList.join(',')}}`)
 				}
-				if (variantParts.length > 0) {
-					emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.variants set value {${variantParts.join(',')}}`)
-				}
+				// 空でも `set value {}` で必ず上書きする (= 前回 export で書いた `on_apply:1b` 等が
+				// storage に残り、 フラグ不要になった後も dispatch が成立し続けるのを防ぐ)。
+				emit(`data modify storage ${project_storage.replace(':', '.')}:meta d.variants set value {${variantParts.join(',')}}`)
 			}
 		%%>
-
-		# TSB Optimized Export : animation_hash 判定で reload 時のキュー再構築をスキップ。
-		# 同一値の set value は throw + success 0 になる仕様
-		# (`DataCommands.java::ERROR_MERGE_UNCHANGED`) を利用、 hash 変化時のみ init_queue。
-		# 部分展開中 reload は hash 一致でスキップされるが、 残った queue は global tick の
-		# load_dispatch_step が引き続き処理するため最終的に完全展開される。
-		# datapack 入れ替え時の旧 storage 残骸は許容 (主に同じ cell の上書きで除去、
-		# 一部 unreferenced cell は残るが運用上問題なし)。
-		# 詳細 : docs/tsb-known-issues/reload-skip-on-hash-match.md
-		execute store success score #h <%OBJECTIVES.I()%> run data modify storage <%project_storage.replace(':', '.')%>:state d.animation_hash set value "<%animation_hash%>"
-		execute if score #h <%OBJECTIVES.I()%> matches 1 run function <%blueprint_id%>/load/init_queue
+	} ELSE IF (tsb_optimized_export) {
+		# variant 関連を一切出力しない構成では上の `set value` が出ないため、 旧 export の
+		# `d.variants` が storage に残り続ける。 TSB 経路は on_load で cleanup を呼ばない
+		# 方針なので、 この経路だけは明示的に remove する。
+		# 不在時の `data remove` は ERROR_MERGE_UNCHANGED を投げる (= 初回 load で毎回踏む) ため、
+		# 存在確認を挟む。
+		execute if data storage <%project_storage.replace(':', '.')%>:meta d.variants run data remove storage <%project_storage.replace(':', '.')%>:meta d.variants
 	}
 }
 
@@ -1383,7 +1392,7 @@ dir remove {
 	}
 }
 
-IF (Object.keys(rig.variants).length > 1) {
+IF (needs_variant_functions) {
 	dir variants {
 		IF (tsb_optimized_export) {
 			# Phase C 案 V : variant 適用関数を共通 1 ファイル + wrapper N 個 + dispatch 1 個に集約。

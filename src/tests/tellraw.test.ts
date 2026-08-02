@@ -27,6 +27,17 @@ vi.mock('../util/minecraftUtil', () => ({
 vi.mock('../systems/animationRenderer', () => ({}))
 vi.mock('../systems/rigRenderer', () => ({}))
 
+// tellraw.ts は v1.10.2 取り込みで `projectTargetVersionIsAtLeast` を使うようになったが、
+// formats/blueprint は svelte component / svg asset / blockbench-patch-manager を芋づるで
+// 引くため vitest では解決できない (= `window is not defined` で collect 段階から落ちる)。
+// 実際に使うのはこの 1 関数だけなので、 忠実な最小コピーで差し替える。
+vi.mock('../formats/blueprint', () => ({
+	projectTargetVersionIsAtLeast(version: string): boolean {
+		if (!Project?.animated_java) return false
+		return !compareVersions(version, Project.animated_java.target_minecraft_version)
+	},
+}))
+
 // `generic-stream` の broken ESM resolution は vitest.config.ts の resolve.alias 経由で
 // `src/tests/stubs/genericStream.ts` に差し替え済。 ここでは追加 mock 不要。
 

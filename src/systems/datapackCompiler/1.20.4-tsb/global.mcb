@@ -217,11 +217,16 @@ dir global {
 
 			data remove storage <%temp_storage%> args
 			data remove storage <%temp_storage%> uuids
-			data modify storage <%temp_storage%> uuids set from entity @s data.uuids
+			# UUID 一覧は entity NBT ではなく data_manager が読み込んだ storage 側にある
+			# (entity の保存 NBT に `data` compound は存在せず、 読もうとすると NbtPath が
+			#  not-found 例外を投げて score が 0 に落ちる = loop に一度も入らない)。
+			data modify storage <%temp_storage%> uuids set from storage <%temp_storage%> entry.data.uuids
 			execute store result score #aj.length <%OBJECTIVES.I()%> run data get storage <%temp_storage%> uuids
 
 			execute if score #aj.length <%OBJECTIVES.I()%> matches 1.. run block loop_over_uuids {
-				data modify storage <%temp_storage%> args.current_uuid set from storage <%temp_storage%> uuids[-1].uuid
+				# 要素は compound ではなく UUID 文字列そのもの (gu の out をそのまま append している)。
+				# key 名は呼び先 `entity_stack_by_uuid` の `#ARGS: {uuid: string}` に合わせる。
+				data modify storage <%temp_storage%> args.uuid set from storage <%temp_storage%> uuids[-1]
 				data remove storage <%temp_storage%> uuids[-1]
 				function ./entity_stack_by_uuid with storage <%temp_storage%> args
 
