@@ -776,15 +776,9 @@ function summon {
 			data modify storage <%temp_storage%> entry.data.uuids_by_name.<%node.storage_name%> set from storage <%gu_storage%> out
 		}
 
-		IF (has_entity_locators) {
-			REPEAT (Object.values(rig.nodes).filter(node => node.type === 'locator' && node.config?.use_entity)) as locator {
-				block { with storage <%temp_storage%> entry.data.locators.<%locator.storage_name%>
-					# Track any custom entities on the locator.
-					$execute at @s as $(uuid) at @s run function animated_java:global/util/get_entity_stack_uuids
-				}
-				data modify storage <%temp_storage%> entry.data.uuids append from storage <%temp_storage%> uuids
-			}
-		}
+		# NOTE - locator に乗っている custom entity の UUID 収集は on_summon_function の実行後に行う
+		# (= on_summon_function が locator に entity を乗せる可能性があるため)。
+		# 実処理は下の on_summon 呼び出し直後に移動済み。
 
 		function <%blueprint_id%>/zzz/set_default_pose
 
@@ -890,15 +884,32 @@ function summon {
 		execute on passengers run data modify entity @s teleport_duration set value <%teleportation_duration%>
 
 		IF (has_entity_locators) {
-			REPEAT (Object.values(rig.nodes).filter(node => node.type === 'locator' && node.config?.use_entity && node.config.on_summon_function)) as locator {
-				block { with storage <%temp_storage%> entry.data.locators.<%locator.storage_name%>
-					$execute at @s as $(uuid) at @s run block on_summon/custom_<%locator.type + '_' + locator.storage_name%> {
-						<%%
-							emit.mcb(locator.config.on_summon_function)
-						%%>
+			# entry.data.locators の値を macro 引数として先に capture しておく。
+			# on_summon_function 内で別の rig が召喚されると temp_storage の entry.data が
+			# 上書きされるが、 capture 済みの引数はその影響を受けない。
+			block { with storage <%temp_storage%> entry.data.locators
+				REPEAT (Object.values(rig.nodes).filter(node => node.type === 'locator' && node.config?.use_entity && node.config.on_summon_function)) as locator {
+					$block { $(<%locator.storage_name%>)
+						$execute as $(uuid) at @s run block on_summon/custom_<%locator.type + '_' + locator.storage_name%> {
+							<%%
+								emit.mcb(locator.config.on_summon_function)
+							%%>
+						}
 					}
 				}
 			}
+
+			# on_summon_function 内の別 rig 召喚で temp_storage entry / args が入れ替わっている
+			# 可能性があるため、 自分の entry を読み直してから UUID を収集する。
+			data_manager prep read
+			REPEAT (Object.values(rig.nodes).filter(node => node.type === 'locator' && node.config?.use_entity)) as locator {
+				block { with storage <%temp_storage%> entry.data.locators.<%locator.storage_name%>
+					# Track any custom entities on the locator.
+					$execute as $(uuid) at @s run function animated_java:global/util/get_entity_stack_uuids
+				}
+				data modify storage <%temp_storage%> entry.data.uuids append from storage <%temp_storage%> uuids
+			}
+			data_manager write
 		}
 
 		REPEAT (Object.values(rig.nodes).filter(node => BONE_TYPES.includes(node.type) && node.on_summon_function?.trim())) as node {
