@@ -81,9 +81,14 @@ function on_load {
 		# Phase C 案 V : variant 適用テーブルを on_load で同期書き込み (サイズ < 1KB)。
 		# `aj.<bp>:meta d.variants.<variant>.<bone_id>` = `{cmd?: int, cfg?: compound}`、 影響しない
 		# bone は path 不在 = no-op。 cleanup の `d` 配下 remove で消えるので残骸残りなし。
+		# 加えて root On-Apply Function を持つ variant には `on_apply:1b` を並べる
+		# (= `variants/_apply` の dispatch ガード、 詳細は variants/_apply 側のコメント)。
 		<%%
 			if (Object.keys(rig.variants).length > 0) {
 				const filteredBones = Object.values(rig.nodes).filter(n => BONE_TYPES.includes(n.type))
+				// variant が 1 個だけの blueprint では variants dir 自体を生成しないので、
+				// on_apply フラグも書かない (= 読む側が存在しない)。
+				const emitOnApplyFlag = Object.keys(rig.variants).length > 1
 				const variantParts = []
 				for (const variant of Object.values(rig.variants)) {
 					const bonePartsList = []
@@ -113,6 +118,8 @@ function on_load {
 						if (cfgNbt !== null) parts.push(`cfg:${cfgNbt}`)
 						bonePartsList.push(`"${i}":{${parts.join(',')}}`)
 					})
+					// on_apply フラグは bone key と同じ compound に並べる (bone key は数値文字列なので衝突しない)。
+					if (emitOnApplyFlag && variant.on_apply_function) bonePartsList.push('on_apply:1b')
 					if (bonePartsList.length === 0) continue
 					variantParts.push(`${variant.name}:{${bonePartsList.join(',')}}`)
 				}
@@ -1399,6 +1406,20 @@ IF (Object.keys(rig.variants).length > 1) {
 							emit(`$execute on passengers if entity @s[scores={${OBJECTIVES.BONE_ID(blueprint_id)}=${i}}] if data storage ${cfgPath} run data modify entity @s {} merge from storage ${cfgPath}`)
 						})
 				%%>
+				IF (Object.values(rig.variants).some(v => v.on_apply_function)) {
+					# variant 単位の root On-Apply Function dispatch。 集約側の適用経路
+					# (wrapper `<variant>/apply` / `_apply_at_frame` / `_lfx` の variant 切替) は
+					# 全てこの `_apply` を必ず 1 回だけ通るため、 ここに 1 箇所置けば経路を問わず
+					# 1 回だけ実行され、 経路の重複による二重実行も起きない。
+					# ガードの `on_apply` フラグは on_load の meta テーブル側で立てていて、
+					# フラグが立つ variant にだけ `_on_apply` を生成する。 フラグ不在の variant では
+					# `run` 節に到達しない = 存在しない関数の解決自体が起きない
+					# (`FunctionArgument` の関数解決は parse 時ではなく実行時 : 1.20.4 の
+					#  FunctionArgument.java:76-78)。
+					# `at @s` で実行位置を root entity に固定する (= 呼び出し元の位置を継承させない、
+					# changelog / UI の "runs as and at the root entity" 契約)。
+					$execute if data storage <%project_storage.replace(':', '.')%>:meta d.variants.$(variant).on_apply at @s run function <%blueprint_id%>/variants/$(variant)/_on_apply
+				}
 				return 1
 			}
 
@@ -1409,6 +1430,17 @@ IF (Object.keys(rig.variants).length > 1) {
 						# UX 維持の薄い wrapper。 internal dispatch は _apply_at_frame で wrapper バイパスする。
 						function <%blueprint_id%>/variants/_apply {variant: "<%variant.name%>"}
 						return 1
+					}
+
+					IF (variant.on_apply_function) {
+						function _on_apply {
+							# variant 単位の root On-Apply Function 本体。 `_apply` の dispatch から
+							# root entity の実行者 + 位置 (as/at @s) で 1 回だけ呼ばれる。
+							# 設定のある variant にのみ生成する (= 未設定なら従来通りファイルは増えない)。
+							<%%
+								emit.mcb(variant.on_apply_function)
+							%%>
+						}
 					}
 				}
 			}
@@ -1475,9 +1507,14 @@ IF (Object.keys(rig.variants).length > 1) {
 							}
 						}
 						IF (variant.on_apply_function) {
-							<%%
-								emit.mcb(variant.on_apply_function)
-							%%>
+							# root On-Apply Function は root entity の実行者 + 位置で走る契約
+							# (= changelog / UI の "runs as and at the root entity")。 そのまま emit すると
+							# 位置だけ呼び出し元から継承されてしまうため、 `at @s` で明示的に固定する。
+							execute at @s run block on_apply {
+								<%%
+									emit.mcb(variant.on_apply_function)
+								%%>
+							}
 						}
 
 						# Return success to allow this function to be used in function conditions.
