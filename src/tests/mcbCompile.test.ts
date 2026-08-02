@@ -34,7 +34,7 @@ vi.mock('../systems/rigRenderer', () => ({}))
 
 import { compileMcbProject } from '../systems/datapackCompiler/mcbCompiler'
 import type { ExportedFile } from '../systems/util'
-import { compileFixture } from './fixtures/minimalRig'
+import { compileFixture, type FixtureOptions } from './fixtures/minimalRig'
 
 /** Map から `suffix` で終わるキーのファイル内容を 1 つだけ取り出す。 */
 function getFileBySuffix(files: Map<string, string>, suffix: string): string {
@@ -141,6 +141,17 @@ function variantMetaLines(onLoad: string): string[] {
 }
 
 /**
+ * root On-Apply Function の本体。 生成物に素通しで載ることを確認するためのマーカーなので、
+ * 他の生成行と衝突しない文字列にしてある。
+ */
+const ON_APPLY_BODY = 'say aj_fixture_on_apply'
+
+/** default variant だけ + root On-Apply あり (= 旧 gate が握り潰していた構成)。 */
+const DEFAULT_ONLY_WITH_ON_APPLY: FixtureOptions = {
+	variants: [{ name: 'default', isDefault: true, onApplyFunction: ON_APPLY_BODY }],
+}
+
+/**
  * `needs_variant_functions` gate の回帰テスト。
  *
  * 旧実装の gate は `Object.keys(rig.variants).length > 1` だったが、 `rig.variants` には
@@ -152,15 +163,11 @@ function variantMetaLines(onLoad: string): string[] {
  * animation の有無からも独立している。
  */
 describe('1.20.4-tsb variants gate (needs_variant_functions)', () => {
-	it('default variant のみ + On-Apply あり + animation なしでも variants/ が出る', async () => {
-		const files = await compileFixture({
-			variants: [{ name: 'default', isDefault: true, onApplyFunction: 'say applied' }],
-		})
+	it('default variant のみ + On-Apply あり + animation なしでも variants/ が出て呼び出しが繋がる', async () => {
+		const files = await compileFixture(DEFAULT_ONLY_WITH_ON_APPLY)
 
 		expect(hasFileBySuffix(files, '/variants/default/apply.mcfunction')).toBe(true)
 		expect(hasFileBySuffix(files, '/variants/_apply.mcfunction')).toBe(true)
-		// root On-Apply Function 本体も variant 単位で切り出される。
-		expect(hasFileBySuffix(files, '/variants/default/_on_apply.mcfunction')).toBe(true)
 
 		// metadata は animation 用の block ではなく needs_variant_functions 側の block から出る。
 		const onLoad = getFileBySuffix(files, PROJECT_ON_LOAD)
@@ -169,14 +176,30 @@ describe('1.20.4-tsb variants gate (needs_variant_functions)', () => {
 		expect(metaLines[0]).toContain('d.variants set value')
 		// `_apply` の dispatch ガードになるフラグ。
 		expect(metaLines[0]).toContain('on_apply:1b')
+
+		// --- ファイルの存在だけでなく、 呼び出しが実際に繋がっていることを見る --------------
+		// (= 実機検証ができないので、 wrapper → _apply → _on_apply の 3 段を生成物で追う)
+
+		// 1. wrapper は共通 _apply に variant 名を渡して dispatch する。
+		const wrapper = getFileBySuffix(files, '/variants/default/apply.mcfunction')
+		expect(wrapper).toContain('function aj:test_rig/variants/_apply {variant: "default"}')
+
+		// 2. 共通 _apply は metadata の on_apply フラグを条件に variant 別 _on_apply を呼ぶ。
+		//    `$(variant)` は実行時マクロなのでコンパイル後もそのまま残る (= 行頭 `$` の macro line)。
+		const apply = getFileBySuffix(files, '/variants/_apply.mcfunction')
+		expect(apply).toContain(
+			'$execute if data storage aj.test_rig:meta d.variants.$(variant).on_apply at @s run function aj:test_rig/variants/$(variant)/_on_apply'
+		)
+
+		// 3. _on_apply には UI で設定した On-Apply Function の本文がそのまま載る。
+		const onApply = getFileBySuffix(files, '/variants/default/_on_apply.mcfunction')
+		expect(onApply).toContain(ON_APPLY_BODY)
 	})
 
 	it('animation を足しても On-Apply の出力結果は変わらない', async () => {
-		const withoutAnimations = await compileFixture({
-			variants: [{ name: 'default', isDefault: true, onApplyFunction: 'say applied' }],
-		})
+		const withoutAnimations = await compileFixture(DEFAULT_ONLY_WITH_ON_APPLY)
 		const withAnimations = await compileFixture({
-			variants: [{ name: 'default', isDefault: true, onApplyFunction: 'say applied' }],
+			...DEFAULT_ONLY_WITH_ON_APPLY,
 			animations: [{ name: 'idle' }],
 		})
 
@@ -186,7 +209,12 @@ describe('1.20.4-tsb variants gate (needs_variant_functions)', () => {
 			variantMetaLines(getFileBySuffix(withoutAnimations, PROJECT_ON_LOAD))
 		)
 
-		expect(hasFileBySuffix(withAnimations, '/variants/default/_on_apply.mcfunction')).toBe(true)
+		// _on_apply の本文も一致すること (= animation 経路だけ本文が落ちる退行も拾う)。
+		const onApplyPath = '/variants/default/_on_apply.mcfunction'
+		expect(getFileBySuffix(withAnimations, onApplyPath)).toBe(
+			getFileBySuffix(withoutAnimations, onApplyPath)
+		)
+		expect(getFileBySuffix(withAnimations, onApplyPath)).toContain(ON_APPLY_BODY)
 	})
 
 	it('On-Apply が無くても variant keyframe があれば variants/ が出る', async () => {
@@ -210,11 +238,13 @@ describe('1.20.4-tsb variants gate (needs_variant_functions)', () => {
 		expect(variantFilePaths(files)).toEqual([])
 
 		// TSB 経路は on_load で cleanup を呼ばないため、 gate が閉じた経路では
-		// 旧 export が残した d.variants を明示的に消す必要がある。
+		// 旧 export が残した d.variants を明示的に消す必要がある。 不在時の `data remove` は
+		// ERROR_MERGE_UNCHANGED を投げる (= 初回 load で毎回踏む) ので存在確認付きで出す。
 		const metaLines = variantMetaLines(getFileBySuffix(files, PROJECT_ON_LOAD))
 		expect(metaLines).toHaveLength(1)
-		expect(metaLines[0]).toContain('data remove storage aj.test_rig:meta d.variants')
-		expect(metaLines[0]).not.toContain('set value')
+		expect(metaLines[0]).toBe(
+			'execute if data storage aj.test_rig:meta d.variants run data remove storage aj.test_rig:meta d.variants'
+		)
 	})
 
 	it('custom variant があれば従来どおり全 variant の apply が出る', async () => {
