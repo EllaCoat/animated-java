@@ -66,6 +66,11 @@ describe('compileMcbProject smoke', () => {
 		})
 
 		expect(exportedFiles.size).toBeGreaterThan(0)
+		// 件数だけでは「何かが出た」 以上のことを保証できないので、 対象の関数と本文まで見る。
+		const paths = [...exportedFiles.keys()].map(p => p.replaceAll('\\', '/'))
+		const helloPath = paths.find(p => p.endsWith('/hello.mcfunction'))
+		expect(helloPath, 'hello.mcfunction が生成されていない').toBeDefined()
+		expect(String(exportedFiles.get(helloPath!)!.content)).toContain('say hi')
 	})
 })
 
