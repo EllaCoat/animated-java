@@ -1474,6 +1474,12 @@ IF (Object.keys(rig.variants).length > 1) {
 									}
 							}
 						}
+						IF (variant.on_apply_function) {
+							<%%
+								emit.mcb(variant.on_apply_function)
+							%%>
+						}
+
 						# Return success to allow this function to be used in function conditions.
 						return 1
 					}
