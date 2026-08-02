@@ -1,6 +1,16 @@
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
+	resolve: {
+		alias: {
+			// src 側は `deepslate/lib/nbt` で import しているが、 deepslate の package.json
+			// "exports" が公開しているのは `./nbt` (= `lib/nbt/main.js`) だけ。 production build では
+			// `.scripts/esbuild.ts` の DEPENDENCY_QUARKS plugin が手動解決しているため通るが、
+			// vitest には同 plugin が無く import-analysis で落ちる。 `lib/nbt/main.js` は
+			// `lib/nbt/index.js` の re-export なので、 alias で公開 subpath に寄せて吸収する。
+			'deepslate/lib/nbt': 'deepslate/nbt',
+		},
+	},
 	test: {
 		dir: 'src/tests',
 		server: {
