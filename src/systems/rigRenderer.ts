@@ -24,6 +24,7 @@ import {
 	restoreSceneAngle,
 	updatePreview,
 } from './animationRenderer'
+import { withRenderHooksSuppressed } from './animationRenderHooks'
 import { IntentionalExportError } from './errors'
 import type { TintSource } from './minecraft/itemDefinitions'
 
@@ -803,12 +804,18 @@ function renderVariant(variant: Variant, rig: IRenderedRig): IRenderedVariant {
 function getDefaultTransforms(rig: IRenderedRig) {
 	// @ts-expect-error - Broken BB types
 	const anim = new Blockbench.Animation()
-	correctSceneAngle()
-	updatePreview(anim, 0)
-	updatePreview(anim, 0) // IK doesn't work unless I call this twice for some reason...
-	const transforms = getFrame(anim, rig.nodes, 0).node_transforms
-	restoreSceneAngle()
-	return transforms
+	// 使い捨ての空 Animation を評価するだけの経路なので、 外部 hook は絶対に発火させない
+	return withRenderHooksSuppressed(() => {
+		try {
+			correctSceneAngle()
+			updatePreview(anim, 0, 0)
+			updatePreview(anim, 0, 0) // IK doesn't work unless I call this twice for some reason...
+			const transforms = getFrame(anim, rig.nodes, 0, 0).node_transforms
+			return transforms
+		} finally {
+			restoreSceneAngle()
+		}
+	})
 }
 
 export function renderRig(modelExportFolder: string, textureExportFolder: string): IRenderedRig {

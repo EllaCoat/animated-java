@@ -11,6 +11,13 @@
  *   `onBeginRendering` → (animation ごとに `onBeginAnimation` → frame ごとに `onPose` → `onEndAnimation`)
  *   → `onEndRendering`。 begin / pose 系は登録順、 end 系は逆順
  * - `onPose` が呼ばれるのは `updatePreview` が keyframe pose を scene に確定させた直後
+ * - **`onPose` は同じ `frameIndex` で 1 frame につき複数回呼ばれる**。AJ は 1 frame の中で
+ *   `updatePreview` を複数回走らせるため (= IK を成立させるための二度呼び / pre-post 判定の side sample と
+ *   その巻き戻し / null_object ごとの再評価)。回数は blueprint の構成で変わるので、 **hook 側は回数を数えず
+ *   `frameIndex` の変化だけを見て「進める」 か 「同じ状態を再適用する」 かを決めること**。
+ *   同じ `frameIndex` に対しては何度呼ばれても結果が変わらない (= 冪等) 実装が要る
+ * - `timeSeconds` は `frameTimeSeconds` と一致しないことがある (= pre-post の side sample では
+ *   `frameTimeSeconds + 0.001`)。時刻の正本は `frameIndex` であり、 `timeSeconds` は参考値として扱う
  *
  * この module は Blockbench / THREE の global を実行時に参照しない (= 型は `import type` と ambient のみ)。
  */
