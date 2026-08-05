@@ -164,7 +164,8 @@ export function getFrame(
 		const keyframes = keyframeCache.get(uuid)
 		if (!keyframes) continue
 		const keyframe = keyframes.get(time)
-		const prevKeyframe = keyframes.get(time - 0.05)
+		// keyframeCache のキーは格子に正規化済みなので、引く側も再スナップしないと浮動小数誤差で外れる
+		const prevKeyframe = keyframes.get(roundToNth(time - 0.05, 20))
 		const lastFrame = lastFrameCache.get(uuid)
 
 		const transform = {} as INodeTransform
@@ -179,7 +180,7 @@ export function getFrame(
 				if (node.parent && node.parent !== 'root') {
 					const parentKeyframes = keyframeCache.get(node.parent)
 					const parentKeyframe = parentKeyframes?.get(time)
-					const prevParentKeyframe = parentKeyframes?.get(time - 0.05)
+					const prevParentKeyframe = parentKeyframes?.get(roundToNth(time - 0.05, 20))
 					if (parentKeyframe?.interpolation === 'step') {
 						transform.interpolation = 'step'
 					} else if (prevParentKeyframe?.data_points.length === 2) {
