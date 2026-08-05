@@ -69,7 +69,10 @@ registerPropertyOverridePatch({
 				for (const kf of animator.keyframes) {
 					let rounded = roundToNth(kf.time, DEFAULT_SNAPPING_VALUE)
 					if (rounded === kf.time) continue
-					if (rounded === lastTime) rounded += 0.05
+					// ずらした結果も格子へ載せ直す (= 素の加算だと 0.1 + 0.05 が
+					// 0.15000000000000002 になり、 frame ループ側の時刻から引けなくなる)
+					if (rounded === lastTime)
+						rounded = roundToNth(rounded + 0.05, DEFAULT_SNAPPING_VALUE)
 					kf.time = rounded
 					lastTime = rounded
 				}
