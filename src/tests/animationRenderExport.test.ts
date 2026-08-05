@@ -8,6 +8,7 @@
  * 2.  hook 登録で `node_transforms` と `hashAnimations` が変わること
  * 2b. 変化後の値が期待値と一致すること (= 「変わった」 だけでなく 「正しく 1 回分だけ変わった」)
  * 2c. 冪等でない hook を入れると 2b が落ちること (= 2b が二重適用を検出できることの裏取り)
+ * 2d. shear だけを加えた場合も hash が変わること (= 旧式の hash では検出できなかった経路)
  * 3.  unregister で baseline へ完全復帰すること
  * 4.  `onPose` の `frameIndex` が 0 から 1 ずつ進み、 同じ値で複数回呼ばれること
  * 5.  `frameTimeSeconds` が frame ループの `time` と全 frame で一致すること
@@ -27,6 +28,10 @@
  *
  * golden は **hook 導入前の commit (`a886b10e`) の実装が出した値**であり、 現ブランチのコードから
  * 作ったものではない。 これが 1b を 「回帰ガード」 ではなく 「受け入れ条件の証明」 にしている。
+ *
+ * ただし **hash 値だけは比較に使わない**。 本 PR で `hashAnimations` に `matrix.elements` を
+ * 混ぜたため、 golden の `main_hash_legacy_algorithm` は現行実装の出力と一致しない (= 意図した変更)。
+ * 比較対象は `animations` の深比較のみで、 hash の決定性は `1.`、 変化への追従は `2.` / `2d.` が見る。
  * harness の fixture 構成 (= bone 1 個 / keyframe 無し / length 0.5) を変えると golden も
  * 作り直しになるので、 そのときは同じ手順を踏むこと。 現ブランチの出力で上書きしてはいけない。
  *
@@ -41,6 +46,8 @@
  * hook 導入の前後で変わっておらず、 harness は `updatePreview` / `getFrame` を直接呼ばないため。
  * mock 一式も、 `animationRenderHooks` を除けばそのまま通る。
  */
+import { createHash } from 'node:crypto'
+
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // exportProgress は svelte-patching-tools/blockbench (= `class SvelteDialog extends Dialog`) を
@@ -176,6 +183,73 @@ const HOOK_ID = 'synthetic-physics'
 const SECOND_HOOK_ID = 'synthetic-physics-2'
 
 /**
+ * shear 検証で matrix に加える量。 **`THREE.Matrix4.decompose` から見えない大きさ**である必要がある。
+ *
+ * 加え方は `m12 += Δ` / `m21 -= Δ` の反対称ペア。 harness の pose は Y 軸まわりの回転だけなので
+ * 全 frame で `m12 = m21 = 0` であり、 このペアは :
+ *
+ * - `decompose` の scale = 各列のノルム → `sqrt(1 + Δ²)`。 `Δ ≤ 1e-8` なら `1 + Δ²` が double で
+ *   1 に丸まるので **bit 単位で不変**
+ * - `setFromRotationMatrix` はこの姿勢 (= trace ≤ 0 かつ m22 > m33) で第 2 分岐に入り、
+ *   `m12` と `m21` を **和** `(m12 + m21)` の形でしか読まない → `(+Δ) + (-Δ) = 0` で **不変**
+ * - 一方 col0 と col1 の内積は `-2Δ` になる → 基底が直交でなくなる = **shear**
+ *
+ * `1e-7` まで上げると scale と quaternion が動いてしまい 「decompose から見えない」 が崩れる。
+ */
+const SHEAR_DELTA = 1e-8
+
+/**
+ * shear を当てる frame。 **基底が軸並行な frame でないと完全な不可視にはならない**ため 0 に固定する。
+ *
+ * harness の pose は frame ごとに Y 軸まわり `time` rad の回転が入るので、 frame 0 以外では
+ * col0 のノルムが `0.9999999999999999` になり `invSX !== invSY` となる。 すると `decompose` の
+ * 正規化で `Δ * invSY - Δ * invSX` が厳密な 0 にならず、 `rot` に 1e-25 度オーダーの残差が出て
+ * 旧式 hash の文字列が変わってしまう (= 「旧式は検出できない」 の証明が成立しなくなる)。
+ * frame 0 は基底が厳密に軸並行 (= 180 度 Y 回転) なので残差が完全に消える。
+ *
+ * 裏を返すと、 **旧式 hash が shear を拾えるかどうかは浮動小数の残差次第**であって、
+ * shear そのものを見ているわけではない。
+ */
+const SHEAR_FRAME_INDEX = 0
+
+/**
+ * 本 PR で `matrix.elements` を混ぜる前の `hashAnimations` を再現したもの。
+ * 「旧式では検出できなかった」 ことを示すためだけに使う (= production には存在しない)。
+ */
+function legacyHashAnimations(animations: IRenderedAnimation[]) {
+	const hash = createHash('sha256')
+	for (const animation of animations) {
+		hash.update('anim;' + animation.name)
+		hash.update(';' + animation.duration.toString())
+		hash.update(';' + animation.loop_mode)
+		hash.update(';' + (animation.tsb_priority ?? 'low'))
+		hash.update(';' + Object.keys(animation.modified_nodes).join(';'))
+		for (const frame of animation.frames) {
+			hash.update(';' + frame.time.toString())
+			for (const [uuid, node] of Object.entries(frame.node_transforms)) {
+				hash.update(';' + uuid)
+				hash.update(';' + node.pos.join(';'))
+				hash.update(';' + node.rot.join(';'))
+				hash.update(';' + node.scale.join(';'))
+				node.interpolation && hash.update(';' + node.interpolation)
+				if (node.function) hash.update(';' + node.function)
+				if (node.function_execute_condition)
+					hash.update(';' + node.function_execute_condition)
+			}
+			if (frame.variants) {
+				hash.update(';' + frame.variants)
+				if (frame.variants_execute_condition)
+					hash.update(';' + frame.variants_execute_condition)
+			}
+			if (frame.function) hash.update(';' + frame.function)
+			if (frame.function_execute_condition)
+				hash.update(';' + frame.function_execute_condition)
+		}
+	}
+	return hash.digest('hex')
+}
+
+/**
  * 1 frame につき 1 回分だけ平行移動を足す hook。
  *
  * `onPose` は 1 frame につき複数回呼ばれるが、 production は各 `updatePreview` の頭で
@@ -241,8 +315,10 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 	it('1b. hook 未登録の出力は main (= a886b10e) の golden と一致する', async () => {
 		const animations = await render(createRenderHarness({ boneUuid: BONE_UUID }))
 
+		// transform の深比較が受け入れ条件 (= hook 未登録時の出力が導入前と一致する) の本体。
+		// golden の hash 値は比較に使わない (= 本 PR で hashAnimations に matrix を混ぜたため
+		// main 由来の値とは一致しない)。 hash の決定性は `1.`、 変化への追従は `2.` が見ている。
 		expect(serializeAnimations(animations)).toEqual(GOLDEN.animations)
-		expect(hashAnimations(animations)).toBe(GOLDEN.hash)
 	})
 
 	it('2. hook を登録すると node_transforms と hash が変わる', async () => {
@@ -255,6 +331,56 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		expect(hooked[0].frames.length).toBe(baseline[0].frames.length)
 		expect(extractBoneTransforms(hooked)).not.toEqual(extractBoneTransforms(baseline))
 		expect(hashAnimations(hooked)).not.toBe(hashAnimations(baseline))
+	})
+
+	it('2d. shear だけを加えると pos / rot / scale は不変でも hash が変わる', async () => {
+		const baseline = await render(createRenderHarness({ boneUuid: BONE_UUID }))
+
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		registerRenderHooks(HOOK_ID, {
+			onPose(context: RenderHookContext) {
+				// frame 0 に限定する (= 下記のとおり、 基底が軸並行な frame でないと
+				// decompose の残差が完全には消えないため)。
+				if (context.frameIndex !== SHEAR_FRAME_INDEX) return
+				// `matrixWorld` を直接いじる (= `mesh.matrix` 側だと次の updateMatrixWorld で
+				// TRS から再合成されて消える)。 そのためここでは updateMatrixWorld を呼ばない。
+				const elements = harness.bone.mesh.matrixWorld.elements
+				elements[4] += SHEAR_DELTA // m12 (= col1.x)
+				elements[1] -= SHEAR_DELTA // m21 (= col0.y)
+			},
+		})
+		const sheared = await render(harness)
+
+		// 基底が直交でなくなっている (= shear が乗っている)。
+		const shearedMatrix =
+			sheared[0].frames[SHEAR_FRAME_INDEX].node_transforms[BONE_UUID].matrix.elements
+		const col0 = [shearedMatrix[0], shearedMatrix[1], shearedMatrix[2]]
+		const col1 = [shearedMatrix[4], shearedMatrix[5], shearedMatrix[6]]
+		const dot = col0[0] * col1[0] + col0[1] * col1[1] + col0[2] * col1[2]
+		expect(Math.abs(dot)).toBeCloseTo(2 * SHEAR_DELTA, 12)
+
+		// pos / rot / scale は **bit 単位で** 不変。
+		const baseFrames = baseline[0].frames
+		const shearedFrames = sheared[0].frames
+		expect(shearedFrames.length).toBe(baseFrames.length)
+		shearedFrames.forEach((frame, index) => {
+			const before = baseFrames[index].node_transforms[BONE_UUID]
+			const after = frame.node_transforms[BONE_UUID]
+			expect(after.pos).toEqual(before.pos)
+			expect(after.rot).toEqual(before.rot)
+			expect(after.scale).toEqual(before.scale)
+		})
+		// matrix は shear を当てた frame だけが変わっている。
+		const beforeMatrix = Array.from(
+			baseFrames[SHEAR_FRAME_INDEX].node_transforms[BONE_UUID].matrix.elements
+		)
+		const afterMatrix = Array.from(shearedMatrix)
+		expect(afterMatrix).not.toEqual(beforeMatrix)
+
+		// 旧式 (= matrix を mix しない) では変化を検出できなかった。
+		expect(legacyHashAnimations(sheared)).toBe(legacyHashAnimations(baseline))
+		// 現行実装は検出する。
+		expect(hashAnimations(sheared)).not.toBe(hashAnimations(baseline))
 	})
 
 	it('2b. hook 適用後の pos が期待値ちょうど (= 複数回呼ばれても 1 回分)', async () => {

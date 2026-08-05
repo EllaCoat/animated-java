@@ -475,6 +475,12 @@ export function hashAnimations(animations: IRenderedAnimation[]) {
 			hash.update(';' + frame.time.toString())
 			for (const [uuid, node] of Object.entries(frame.node_transforms)) {
 				hash.update(';' + uuid)
+				// matrix は pos / rot / scale の上位互換 (= それらは Matrix4.decompose の出力で、
+				// shear と right rotation を表現できない)。 一方 datapack compiler は matrix 全体を
+				// 使う (= TSB 経路は decomposeTsb の SVD、 純正経路は 16 要素をそのまま書き出す) ため、
+				// 派生値だけを mix すると 「出力は変わったのに hash は同じ」 = reload-skip の誤判定が起きる。
+				// 情報量が最大なので他のどの派生値よりも先に混ぜる。
+				hash.update(';' + node.matrix.elements.join(';'))
 				hash.update(';' + node.pos.join(';'))
 				hash.update(';' + node.rot.join(';'))
 				hash.update(';' + node.scale.join(';'))

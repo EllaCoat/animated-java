@@ -1,5 +1,6 @@
 {
-	"hash": "be401c44af6132f95070fa446894aaccf71370204b1c30fb890ab1f74521ddad",
+	"_note": "hash 値は main (a886b10e) 由来だが、 本 PR で hashAnimations に matrix.elements を混ぜたため現行実装の出力とは一致しない。 比較には使わないこと (= 受け入れ条件の証明は animations の深比較が担う)。",
+	"main_hash_legacy_algorithm": "be401c44af6132f95070fa446894aaccf71370204b1c30fb890ab1f74521ddad",
 	"animations": [
 		{
 			"name": "test_animation",
