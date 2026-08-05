@@ -344,6 +344,161 @@ describe('animationRenderHooks - 例外の包装', () => {
 		expect(() => beginRenderingSession()).toThrow(RenderHookError)
 		expect(isRenderingSessionActive()).toBe(false)
 	})
+})
+
+// --- 部分失敗の unwind ------------------------------------------------------
+
+describe('animationRenderHooks - begin 系の部分失敗 unwind', () => {
+	it('onBeginRendering の途中失敗で、 成功済み hook に onEndRendering が届く', () => {
+		const log: string[] = []
+		registerRenderHooks('a', {
+			onBeginRendering: () => log.push('a:begin'),
+			onEndRendering: () => log.push('a:end'),
+		})
+		registerRenderHooks('b', {
+			onBeginRendering: () => {
+				log.push('b:begin')
+				throw new Error('boom')
+			},
+			onEndRendering: () => log.push('b:end'),
+		})
+
+		expect(() => beginRenderingSession()).toThrow(RenderHookError)
+
+		// a は begin を受け取ったので end も受け取る。 b は begin 自体が失敗したので end は来ない。
+		expect(log).toEqual(['a:begin', 'b:begin', 'a:end'])
+		expect(isRenderingSessionActive()).toBe(false)
+	})
+
+	it('onBeginRendering の unwind でも元の例外 (= 失敗した hook 由来) が伝播する', () => {
+		const cause = new Error('boom')
+		registerRenderHooks('a', { onBeginRendering: () => {} })
+		registerRenderHooks('b', {
+			onBeginRendering: () => {
+				throw cause
+			},
+		})
+
+		let caught: unknown
+		try {
+			beginRenderingSession()
+		} catch (error) {
+			caught = error
+		}
+
+		expect(caught).toBeInstanceOf(RenderHookError)
+		expect((caught as RenderHookError).hookId).toBe('b')
+		expect((caught as RenderHookError).phase).toBe('onBeginRendering')
+		expect((caught as RenderHookError).cause).toBe(cause)
+	})
+
+	it('unwind 中の onEndRendering が throw しても元の例外が優先される', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const cause = new Error('boom')
+		registerRenderHooks('a', {
+			onBeginRendering: () => {},
+			onEndRendering: () => {
+				throw new Error('unwind failed')
+			},
+		})
+		registerRenderHooks('b', {
+			onBeginRendering: () => {
+				throw cause
+			},
+		})
+
+		let caught: unknown
+		try {
+			beginRenderingSession()
+		} catch (error) {
+			caught = error
+		}
+
+		expect((caught as RenderHookError).hookId).toBe('b')
+		expect((caught as RenderHookError).cause).toBe(cause)
+		// unwind 側の失敗は warn に落ちる
+		expect(warn).toHaveBeenCalledTimes(1)
+		expect(warn.mock.calls[0][0]).toBeInstanceOf(RenderHookError)
+		expect((warn.mock.calls[0][0] as RenderHookError).phase).toBe('onEndRendering')
+		expect(isRenderingSessionActive()).toBe(false)
+		warn.mockRestore()
+	})
+
+	it('onBeginAnimation の途中失敗で、 成功済み hook に onEndAnimation が届く', () => {
+		const log: string[] = []
+		registerRenderHooks('a', {
+			onBeginAnimation: () => log.push('a:begin'),
+			onEndAnimation: () => log.push('a:end'),
+		})
+		registerRenderHooks('b', {
+			onBeginAnimation: () => {
+				log.push('b:begin')
+				throw new Error('boom')
+			},
+			onEndAnimation: () => log.push('b:end'),
+		})
+		beginRenderingSession()
+
+		expect(() => dispatchBeginAnimation(makeAnimationContext())).toThrow(RenderHookError)
+
+		expect(log).toEqual(['a:begin', 'b:begin', 'a:end'])
+		endRenderingSession()
+	})
+
+	it('onBeginAnimation の unwind でも元の例外が伝播する', () => {
+		const cause = new Error('boom')
+		registerRenderHooks('a', { onBeginAnimation: () => {} })
+		registerRenderHooks('b', {
+			onBeginAnimation: () => {
+				throw cause
+			},
+		})
+		beginRenderingSession()
+
+		let caught: unknown
+		try {
+			dispatchBeginAnimation(makeAnimationContext())
+		} catch (error) {
+			caught = error
+		}
+		endRenderingSession()
+
+		expect(caught).toBeInstanceOf(RenderHookError)
+		expect((caught as RenderHookError).hookId).toBe('b')
+		expect((caught as RenderHookError).phase).toBe('onBeginAnimation')
+		expect((caught as RenderHookError).cause).toBe(cause)
+	})
+
+	it('unwind 中の onEndAnimation が throw しても元の例外が優先される', () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const cause = new Error('boom')
+		registerRenderHooks('a', {
+			onBeginAnimation: () => {},
+			onEndAnimation: () => {
+				throw new Error('unwind failed')
+			},
+		})
+		registerRenderHooks('b', {
+			onBeginAnimation: () => {
+				throw cause
+			},
+		})
+		beginRenderingSession()
+
+		let caught: unknown
+		try {
+			dispatchBeginAnimation(makeAnimationContext())
+		} catch (error) {
+			caught = error
+		}
+		endRenderingSession()
+
+		expect((caught as RenderHookError).hookId).toBe('b')
+		expect((caught as RenderHookError).cause).toBe(cause)
+		expect(warn).toHaveBeenCalledTimes(1)
+		expect((warn.mock.calls[0][0] as RenderHookError).phase).toBe('onEndAnimation')
+		warn.mockRestore()
+	})
 
 	it('onEndAnimation は 1 つ目が throw しても全件実行してから throw する', () => {
 		const log: string[] = []

@@ -113,7 +113,13 @@ export function beginRenderingSession() {
 	const participants = Array.from(REGISTERED_HOOKS, ([id, hooks]) => ({ id, hooks }))
 	sessionParticipants = participants
 	try {
-		dispatchSequential(participants, 'onBeginRendering', hooks => hooks.onBeginRendering?.())
+		dispatchSequentialWithUnwind(
+			participants,
+			'onBeginRendering',
+			hooks => hooks.onBeginRendering?.(),
+			'onEndRendering',
+			hooks => hooks.onEndRendering?.()
+		)
 	} catch (error) {
 		// session を開けないまま active に残すと以降の export が全て塞がるため、 状態を巻き戻してから rethrow する
 		sessionParticipants = undefined
@@ -140,7 +146,13 @@ export function isRenderingSessionActive() {
 export function dispatchBeginAnimation(context: RenderAnimationContext) {
 	const participants = getActiveParticipants()
 	if (!participants) return
-	dispatchSequential(participants, 'onBeginAnimation', hooks => hooks.onBeginAnimation?.(context))
+	dispatchSequentialWithUnwind(
+		participants,
+		'onBeginAnimation',
+		hooks => hooks.onBeginAnimation?.(context),
+		'onEndAnimation',
+		hooks => hooks.onEndAnimation?.()
+	)
 }
 
 export function dispatchPose(context: RenderHookContext) {
@@ -209,7 +221,7 @@ function reversed(participants: readonly IRenderHookParticipant[]): IRenderHookP
 	return participants.slice().reverse()
 }
 
-/** begin / pose 系 : 最初の例外で即 rethrow する (= 以降の hook を呼ばない)。 */
+/** pose 系 : 最初の例外で即 rethrow する (= 以降の hook を呼ばない)。 */
 function dispatchSequential(
 	participants: readonly IRenderHookParticipant[],
 	phase: string,
@@ -220,6 +232,49 @@ function dispatchSequential(
 			invoke(participant.hooks)
 		} catch (error) {
 			throw new RenderHookError(participant.id, phase, error)
+		}
+	}
+}
+
+/**
+ * begin 系 : 最初の例外で即 rethrow する (= 以降の hook を呼ばない)。 加えて、 **その時点で
+ * 成功済みの participant を逆順に unwind** し、 対になる cleanup を必ず届ける
+ * (= 途中で失敗したとき、 begin だけ受け取って end を受け取らない hook が出るのを防ぐ)。
+ */
+function dispatchSequentialWithUnwind(
+	participants: readonly IRenderHookParticipant[],
+	phase: string,
+	invoke: (hooks: RenderHooks) => void,
+	unwindPhase: string,
+	unwind: (hooks: RenderHooks) => void
+) {
+	const started: IRenderHookParticipant[] = []
+	for (const participant of participants) {
+		try {
+			invoke(participant.hooks)
+		} catch (error) {
+			const failure = new RenderHookError(participant.id, phase, error)
+			unwindStarted(started, unwindPhase, unwind)
+			throw failure
+		}
+		started.push(participant)
+	}
+}
+
+/**
+ * unwind : 成功済みの participant へ逆順で cleanup を送る。
+ * ここでの例外は `console.warn` に落とす (= unwind の引き金になった元の例外を優先するため)。
+ */
+function unwindStarted(
+	started: readonly IRenderHookParticipant[],
+	phase: string,
+	invoke: (hooks: RenderHooks) => void
+) {
+	for (const participant of reversed(started)) {
+		try {
+			invoke(participant.hooks)
+		} catch (error) {
+			console.warn(new RenderHookError(participant.id, phase, error))
 		}
 	}
 }
