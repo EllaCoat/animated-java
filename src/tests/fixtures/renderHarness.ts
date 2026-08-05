@@ -1,0 +1,234 @@
+/**
+ * `renderProjectAnimations` を Blockbench 無しで実走させるための最小 harness。
+ *
+ * production の render 経路 (`renderProjectAnimations` → `renderAnimation` → `updatePreview` /
+ * `getFrame`) をそのまま呼ぶ。 ロジックを test 側へ写さないのが前提なので、 ここで用意するのは
+ * **実行時に触られる global だけ**。
+ *
+ * **前提** : このモジュールは `../../dialogs/exportProgress/exportProgress` /
+ * `../../mods/boneAnimatorMod` / `../../outliner/*` / `../../util/minecraftUtil` が
+ * `vi.mock` されている test file からのみ使える (= いずれも **module 評価時**に Blockbench の
+ * global を要求するため、 global を後から生やす方式では越えられない)。 mock の実体は
+ * `animationRenderExport.test.ts` を参照。
+ *
+ * three は Blockbench が runtime 供給するもの (= 本 repo の直接依存ではない) だが、
+ * `matrixWorld` の階層計算を本物で回さないと出力が検証できないため、 harness では実物を
+ * `globalThis.THREE` に載せる。
+ */
+import * as THREE from 'three'
+
+import type { AnyRenderedNode, IRenderedRig } from '../../systems/rigRenderer'
+
+/** frame ループの刻み幅 (= 1 tick)。 */
+const TICK = 0.05
+
+/**
+ * animatable node の最小実装。
+ *
+ * `updatePreviewBase` の `if (!(node.constructor as any).animator) continue` を通すため、
+ * static `animator` を持つ必要がある。
+ */
+export class HarnessBone {
+	/** `updatePreviewBase` が見る「この class は animate できるか」のフラグ。 */
+	static animator = true
+
+	readonly type = 'bone'
+	readonly parent = 'root'
+	readonly mesh: THREE.Object3D
+
+	constructor(
+		readonly uuid: string,
+		readonly name: string
+	) {
+		this.mesh = new THREE.Object3D()
+		this.mesh.name = name
+	}
+
+	/** `Animator.showDefaultPose(true)` 相当。 rest pose へ戻す。 */
+	resetToRestPose() {
+		this.mesh.position.set(0, 0, 0)
+		this.mesh.rotation.set(0, 0, 0)
+		this.mesh.scale.set(1, 1, 1)
+	}
+
+	/**
+	 * keyframe 評価相当。 時刻の単純な関数で pose を **絶対値として**書く
+	 * (= 相対加算にすると二度呼びで結果が変わり、 production の IK 二度呼びを再現できない)。
+	 *
+	 * 位置は Blockbench 単位 (= `getNodeMatrix` が 1/16 する) なので、 `y = time * 16` で
+	 * 出力側の translation が `time` になる。
+	 */
+	applyPoseAtTime(time: number) {
+		this.mesh.position.set(0, time * 16, 0)
+		this.mesh.rotation.set(0, time, 0)
+		this.mesh.scale.set(1, 1, 1)
+	}
+}
+
+export interface HarnessOptions {
+	/**
+	 * bone の uuid。 render 結果を `compileFixture` へ流す場合は、 fixture rig 側の bone uuid
+	 * (= `minimalRig.ts` の `BONE_UUID`) と一致させる必要がある。
+	 */
+	boneUuid?: string
+	/** animation 名。 */
+	animationName?: string
+	/** animation 長 (秒)。 frame 数は `length / 0.05 + 1`。 */
+	animationLength?: number
+}
+
+/** `renderProjectAnimations` に渡す一式と、 assert 用の参照。 */
+export interface RenderHarness {
+	/** `renderProjectAnimations(project, rig)` の第 1 引数。 */
+	project: ModelProject
+	/** 同第 2 引数。 */
+	rig: IRenderedRig
+	/** 単一の bone。 hook から pose を書き換える対象。 */
+	bone: HarnessBone
+	/** `Canvas.scene` の実体。 */
+	scene: THREE.Scene
+	/** frame ループが生成する時刻の一覧 (= assert 用の期待値)。 */
+	expectedFrameTimes: number[]
+}
+
+/**
+ * `renderProjectAnimations` の実行時に触られる global を立てる。
+ *
+ * 実際に落ちて必要だと分かったものだけを載せている :
+ * - `THREE` : `getNodeMatrix` / `correctSceneAngle` / `eulerFromQuaternion`
+ * - `Math.radToDeg` : `threeAxisRotationToTwoAxisRotation` (= Blockbench が Math に生やす拡張)
+ * - `requestAnimationFrame` : `sleepForAnimationFrame` (= browser global)
+ * - `Canvas` / `Timeline` / `Animator` / `Mode` / `Preview` : render ループ本体
+ * - `NullObject` / `Group` / `Locator` / `OutlinerElement` : `getAnimatableNodes()`
+ *   (= `Interaction` / `TextDisplay` / `Vanilla*Display` は import 経由なので test 側の mock が担当)
+ */
+export function installRenderGlobals(): void {
+	const g = globalThis as any
+
+	// 既存 fixture (`minimalRig.ts`) の `g.THREE ??= { Matrix4: Matrix4Stub }` に負けないよう明示代入する。
+	g.THREE = THREE
+	if (typeof (Math as any).radToDeg !== 'function') {
+		;(Math as any).radToDeg = (radians: number) => THREE.MathUtils.radToDeg(radians)
+	}
+	if (typeof g.requestAnimationFrame !== 'function') {
+		g.requestAnimationFrame = (callback: (time: number) => void) => {
+			return setTimeout(() => callback(Date.now()), 0) as unknown as number
+		}
+	}
+
+	g.Canvas = { scene: new THREE.Scene() }
+	g.Timeline = {
+		time: 0,
+		pause() {},
+		setTime(time: number) {
+			g.Timeline.time = time
+		},
+	}
+	g.Animator = {
+		selected: undefined as unknown,
+		showDefaultPose() {
+			for (const bone of g.Group.all as HarnessBone[]) bone.resetToRestPose()
+		},
+		resetLastValues() {},
+		preview() {},
+	}
+	g.Mode = { selected: { id: 'animate' } }
+	g.Preview = { all: [] }
+
+	// `getAnimatableNodes()` が読む global 群。 bone は Group.all に置く。
+	g.NullObject = { all: [] }
+	g.Group = { all: [] as HarnessBone[] }
+	g.Locator = { all: [] }
+	g.OutlinerElement = { types: {} }
+}
+
+/** frame ループ (`animationRenderer.ts` の `for (let time = 0; ...)`) と同じ時刻列。 */
+function buildExpectedFrameTimes(length: number): number[] {
+	const times: number[] = []
+	for (let time = 0; time <= length; time = Math.round((time + TICK) * 20) / 20) {
+		times.push(time)
+	}
+	return times
+}
+
+/** `IRenderedRig` の最小形。 render 経路が読むのは `nodes` だけ。 */
+function buildHarnessRig(bone: HarnessBone): IRenderedRig {
+	const nodes: Record<string, unknown> = {
+		[bone.uuid]: {
+			type: 'bone',
+			name: bone.name,
+			storage_name: bone.name,
+			uuid: bone.uuid,
+			parent: 'root',
+			base_scale: 1,
+			bounding_box: null,
+			configs: { default: {}, variants: {} },
+		},
+	}
+	return {
+		nodes: nodes as Record<string, AnyRenderedNode>,
+		variants: {},
+		textures: {},
+		model_export_folder: '',
+		texture_export_folder: '',
+		includes_custom_models: false,
+	} as unknown as IRenderedRig
+}
+
+/**
+ * `_Animation` 相当の最小実装。 production が実際に呼ぶのは
+ * `select()` / `getBoneAnimator()` / `animators` / `effects` / `excluded_nodes` / `length` だけ。
+ */
+function buildHarnessAnimation(bone: HarnessBone, name: string, length: number) {
+	const animator = {
+		// `getFrame` の keyframeCache は `animation.animators[uuid]` が truthy でないと
+		// 当該 node を丸ごと skip するため、 空でも animator 自体は必要。
+		keyframes: [] as unknown[],
+		displayFrame() {
+			bone.applyPoseAtTime((globalThis as any).Timeline.time as number)
+		},
+	}
+	return {
+		name,
+		uuid: `animation-${name}`,
+		length,
+		loop: 'once',
+		loop_delay: 0,
+		excluded_nodes: [] as Array<{ value: string }>,
+		effects: undefined,
+		animators: { [bone.uuid]: animator } as Record<string, unknown>,
+		select() {},
+		getBoneAnimator(node: { uuid: string }) {
+			return this.animators[node.uuid]
+		},
+	}
+}
+
+/**
+ * global を立て直したうえで、 単一 bone / 単一 animation の harness を組む。
+ * 呼ぶたびに scene と node registry を作り直すので、 test 間で状態が漏れない。
+ */
+export function createRenderHarness(options: HarnessOptions = {}): RenderHarness {
+	const boneUuid = options.boneUuid ?? 'harness-bone'
+	const animationName = options.animationName ?? 'test_animation'
+	const animationLength = options.animationLength ?? 0.5
+
+	installRenderGlobals()
+	const g = globalThis as any
+
+	const bone = new HarnessBone(boneUuid, 'body')
+	const scene = g.Canvas.scene as THREE.Scene
+	scene.add(bone.mesh)
+	g.Group.all = [bone]
+
+	const animation = buildHarnessAnimation(bone, animationName, animationLength)
+	g.Animator.selected = animation
+
+	return {
+		project: { animations: [animation] } as unknown as ModelProject,
+		rig: buildHarnessRig(bone),
+		bone,
+		scene,
+		expectedFrameTimes: buildExpectedFrameTimes(animationLength),
+	}
+}

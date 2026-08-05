@@ -50,6 +50,7 @@
         "svelte-patching-tools": "^1.0.14",
         "svelte-preprocess": "^6.0.3",
         "svelte-preprocess-esbuild": "^3.0.1",
+        "three": "^0.134.0",
         "typescript": "^6.0.2",
         "typescript-eslint": "^8.45.0",
         "vitest": "^3.2.4",

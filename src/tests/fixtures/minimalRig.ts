@@ -51,7 +51,12 @@ export const DISPLAY_ITEM = 'minecraft:stone'
 
 const BONE_TYPES = ['bone', 'text_display', 'item_display', 'block_display']
 
-const BONE_UUID = 'fixture-bone'
+/**
+ * fixture rig の bone uuid。 外から組み上げた `IRenderedAnimation[]` を
+ * `FixtureOptions.renderedAnimations` で流し込む場合、 animation 側の node uuid を
+ * これに合わせないと `createAnimationStorageTsb` が bone を `modified_nodes` から引けない。
+ */
+export const BONE_UUID = 'fixture-bone'
 const LOCATOR_UUID = 'fixture-locator'
 const CAMERA_UUID = 'fixture-camera'
 
@@ -73,6 +78,14 @@ export interface FixtureOptions {
 		/** 各 frame の variants 配列。variant keyframe の有無を作るために使う。 */
 		frameVariants?: Array<string[] | undefined>
 	}>
+	/**
+	 * 組み上がった `IRenderedAnimation[]` を直接流し込む注入口。
+	 *
+	 * 指定すると `animations` spec からの合成 (`buildAnimations`) をバイパスし、 これをそのまま
+	 * `variables.animations` に載せる。 production の `renderProjectAnimations` の出力を
+	 * datapack まで通すために使う。
+	 */
+	renderedAnimations?: IRenderedAnimation[]
 	/**
 	 * TSB 最適化経路を使うか。省略時 true。
 	 *
@@ -375,7 +388,7 @@ export function buildFixtureVariables(options: FixtureOptions = {}): Record<stri
 
 	const tsbOptimized = options.tsbOptimized ?? true
 	const rig = buildRig(options)
-	const animations = buildAnimations(options, rig)
+	const animations = options.renderedAnimations ?? buildAnimations(options, rig)
 
 	// `parseResourceLocation(BLUEPRINT_ID).path` 相当 (= `aj:test_rig` → `test_rig`)。
 	const path = BLUEPRINT_ID.split(':').slice(1).join('')

@@ -7,6 +7,9 @@
  * - **同期のみ**。 hook が Promise を返しても await しない
  * - **matrix を返さない**。 hook は Blockbench の scene 上の node pose を直接書き換える。
  *   これにより後段の `getFrame` / 差分省略 / `hashAnimations` / datapack compiler の既存経路がそのまま使える
+ * - **pose を書き換えた hook は自分で `Canvas.scene.updateMatrixWorld(true)` を呼ぶこと**。
+ *   `onPose` は AJ 側の `updateMatrixWorld` より後に発火するため、 呼ばないと後段の `getFrame` が読む
+ *   `matrixWorld` に変更が反映されない
  * - **呼び出し順** :
  *   `onBeginRendering` → (animation ごとに `onBeginAnimation` → frame ごとに `onPose` → `onEndAnimation`)
  *   → `onEndRendering`。 begin / pose 系は登録順、 end 系は逆順
