@@ -15,6 +15,7 @@
  * 6b. 本体と `onEndAnimation` が両方 throw したとき、 本体側の例外が伝播すること
  * 6c. cleanup の 1 段が throw しても、 残りの段が走ること
  * 6d. 自分が開いていない session を cleanup で終わらせないこと
+ * 6e. `onBeginAnimation` の部分失敗で、 成功済み hook の `onEndAnimation` が 1 回だけ走ること
  * 7.  `onPose` の中から `evaluateBasePose` を呼べて、 `Timeline.time` が戻ること
  * 8.  1 と 2 の render 結果で、 生成される mcfunction が byte 単位で違うこと
  *
@@ -171,6 +172,8 @@ const HOOK_OFFSET_BB = 16
 const HOOK_OFFSET = HOOK_OFFSET_BB / 16
 
 const HOOK_ID = 'synthetic-physics'
+/** 部分失敗の検証で 2 つ目の hook として使う id。 */
+const SECOND_HOOK_ID = 'synthetic-physics-2'
 
 /**
  * 1 frame につき 1 回分だけ平行移動を足す hook。
@@ -217,10 +220,12 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		// production が毎 render で戻り値全体を console.log するため、 出力を抑える。
 		vi.spyOn(console, 'log').mockImplementation(() => {})
 		unregisterRenderHooks(HOOK_ID)
+		unregisterRenderHooks(SECOND_HOOK_ID)
 	})
 
 	afterEach(() => {
 		unregisterRenderHooks(HOOK_ID)
+		unregisterRenderHooks(SECOND_HOOK_ID)
 		vi.restoreAllMocks()
 	})
 
@@ -454,6 +459,41 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		expect(previewCalls).toBe(1)
 	})
 
+	it('6e. onBeginAnimation の部分失敗で、 成功済み hook の onEndAnimation が 1 回だけ走る', async () => {
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		const cause = new Error('begin exploded')
+		let endAnimationCalls = 0
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation() {},
+			onEndAnimation() {
+				endAnimationCalls++
+			},
+		})
+		registerRenderHooks(SECOND_HOOK_ID, {
+			onBeginAnimation() {
+				throw cause
+			},
+		})
+
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+		unregisterRenderHooks(SECOND_HOOK_ID)
+
+		// registry 側の unwind が送る 1 回だけ (= cleanup の dispatchEndAnimation と二重にならない)。
+		expect(endAnimationCalls).toBe(1)
+		// 伝播するのは失敗した hook 由来の例外。
+		expect(caught).toBeInstanceOf(RenderHookError)
+		expect((caught as RenderHookError).hookId).toBe(SECOND_HOOK_ID)
+		expect((caught as RenderHookError).phase).toBe('onBeginAnimation')
+		expect((caught as RenderHookError).cause).toBe(cause)
+		// global 状態は復旧している。
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(harness.scene.quaternion.w).toBeCloseTo(1, 9)
+		expect(harness.scene.quaternion.y).toBeCloseTo(0, 9)
+	})
+
 	it('6d. 自分が開いていない session を cleanup で終わらせない', async () => {
 		const harness = createRenderHarness({ boneUuid: BONE_UUID })
 		registerRenderHooks(HOOK_ID, { onPose() {} })
@@ -501,10 +541,12 @@ describe('renderProjectAnimations - datapack までの byte 差分', () => {
 	beforeEach(() => {
 		vi.spyOn(console, 'log').mockImplementation(() => {})
 		unregisterRenderHooks(HOOK_ID)
+		unregisterRenderHooks(SECOND_HOOK_ID)
 	})
 
 	afterEach(() => {
 		unregisterRenderHooks(HOOK_ID)
+		unregisterRenderHooks(SECOND_HOOK_ID)
 		vi.restoreAllMocks()
 	})
 

@@ -69,11 +69,19 @@ export class HarnessBone {
 /**
  * `renderProjectAnimations` の戻り値を golden 比較用の安定した形へ落とす。
  *
- * `THREE.Matrix4` / `Vector3` / `Quaternion` をそのまま JSON 化すると three の内部表現
- * (= `_x` 等) に依存するため、 数値配列だけを取り出す。 丸めはしない (= bit 単位で比較する)。
+ * `IRenderedAnimation` / `IRenderedFrame` / `INodeTransform` の **export に効くフィールドを
+ * 網羅する**。 `THREE.Matrix4` / `Vector3` / `Quaternion` をそのまま JSON 化すると three の
+ * 内部表現 (= `_x` 等) に依存するため、 数値配列へ落とす。 丸めはしない (= bit 単位で比較する)。
+ *
+ * `modified_nodes` だけは node 全体だと巨大になるので uuid の一覧 (ソート済み) にしている。
+ * `hashAnimations` が mix しているのも `Object.keys(modified_nodes)` なので粒度が揃う。
+ *
+ * optional フィールドは `undefined` ではなく `null` に正規化する
+ * (= JSON 化で key ごと消えて比較が緩くなるのを防ぐため)。
  *
  * **この関数は golden の生成側 (= main worktree) と比較側の両方で使うので、
- * 変更すると既存 golden と一致しなくなる**。
+ * 変更すると既存 golden と一致しなくなる** (= 再生成手順は `animationRenderExport.test.ts` の
+ * 冒頭 JSDoc)。
  */
 export function serializeAnimations(animations: readonly IRenderedAnimation[]) {
 	return animations.map(animation => ({
@@ -83,9 +91,14 @@ export function serializeAnimations(animations: readonly IRenderedAnimation[]) {
 		loop_delay: animation.loop_delay,
 		duration: animation.duration,
 		loop_mode: animation.loop_mode,
+		tsb_priority: animation.tsb_priority ?? null,
 		modified_nodes: Object.keys(animation.modified_nodes).sort(),
 		frames: animation.frames.map(frame => ({
 			time: frame.time,
+			variants: frame.variants ?? null,
+			variants_execute_condition: frame.variants_execute_condition ?? null,
+			function: frame.function ?? null,
+			function_execute_condition: frame.function_execute_condition ?? null,
 			node_transforms: Object.fromEntries(
 				Object.entries(frame.node_transforms).map(([uuid, transform]) => [
 					uuid,
@@ -95,9 +108,27 @@ export function serializeAnimations(animations: readonly IRenderedAnimation[]) {
 						scale: transform.scale,
 						head_rot: transform.head_rot,
 						matrix: Array.from(transform.matrix.elements),
-						...(transform.interpolation
-							? { interpolation: transform.interpolation }
-							: {}),
+						decomposed: {
+							translation: [
+								transform.decomposed.translation.x,
+								transform.decomposed.translation.y,
+								transform.decomposed.translation.z,
+							],
+							left_rotation: [
+								transform.decomposed.left_rotation.x,
+								transform.decomposed.left_rotation.y,
+								transform.decomposed.left_rotation.z,
+								transform.decomposed.left_rotation.w,
+							],
+							scale: [
+								transform.decomposed.scale.x,
+								transform.decomposed.scale.y,
+								transform.decomposed.scale.z,
+							],
+						},
+						interpolation: transform.interpolation ?? null,
+						function: transform.function ?? null,
+						function_execute_condition: transform.function_execute_condition ?? null,
 					},
 				])
 			),

@@ -8,10 +8,15 @@
 			"loop_delay": 0,
 			"duration": 11,
 			"loop_mode": "once",
+			"tsb_priority": null,
 			"modified_nodes": ["fixture-bone"],
 			"frames": [
 				{
 					"time": 0,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0, 0],
@@ -21,12 +26,24 @@
 							"matrix": [
 								-1, 0, -1.2246467991473532e-16, 0, 0, 1, 0, 0,
 								1.2246467991473532e-16, 0, -1, 0, 0, 0, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0, 0],
+								"left_rotation": [0, 1, 0, 6.123233995736766e-17],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.05,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.05, 0],
@@ -36,12 +53,24 @@
 							"matrix": [
 								-0.9987502603949663, 0, 0.049979169270678206, 0, 0, 1, 0, 0,
 								-0.049979169270678206, 0, -0.9987502603949663, 0, 0, 0.05, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.05, 0],
+								"left_rotation": [0, 0.9996875162757026, 0, -0.02499739591471227],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.1,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.1, 0],
@@ -51,12 +80,24 @@
 							"matrix": [
 								-0.9950041652780258, 0, 0.09983341664682803, 0, 0, 1, 0, 0,
 								-0.09983341664682803, 0, -0.9950041652780258, 0, 0, 0.1, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.1, 0],
+								"left_rotation": [0, 0.9987502603949663, 0, -0.04997916927067827],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.15,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.15, 0],
@@ -66,12 +107,24 @@
 							"matrix": [
 								-0.9887710779360422, 0, 0.1494381324735991, 0, 0, 1, 0, 0,
 								-0.1494381324735991, 0, -0.9887710779360422, 0, 0, 0.15, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.15, 0],
+								"left_rotation": [0, 0.9971888181122075, 0, -0.0749297072727423],
+								"scale": [0.9999999999999999, 1, 0.9999999999999999]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.2,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.2, 0],
@@ -81,12 +134,24 @@
 							"matrix": [
 								-0.9800665778412416, 0, 0.1986693307950611, 0, 0, 1, 0, 0,
 								-0.1986693307950611, 0, -0.9800665778412416, 0, 0, 0.2, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.2, 0],
+								"left_rotation": [0, 0.9950041652780257, 0, -0.0998334166468281],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.25,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.25, 0],
@@ -96,12 +161,24 @@
 							"matrix": [
 								-0.9689124217106447, 0, 0.24740395925452283, 0, 0, 1, 0, 0,
 								-0.24740395925452283, 0, -0.9689124217106447, 0, 0, 0.25, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.25, 0],
+								"left_rotation": [0, 0.9921976672293291, 0, -0.12467473338522765],
+								"scale": [0.9999999999999999, 1, 0.9999999999999999]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.3,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.3, 0],
@@ -111,12 +188,24 @@
 							"matrix": [
 								-0.955336489125606, 0, 0.29552020666133944, 0, 0, 1, 0, 0,
 								-0.29552020666133944, 0, -0.955336489125606, 0, 0, 0.3, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.3, 0],
+								"left_rotation": [0, 0.9887710779360424, 0, -0.14943813247359916],
+								"scale": [0.9999999999999999, 1, 0.9999999999999999]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.35,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.35, 0],
@@ -126,12 +215,24 @@
 							"matrix": [
 								-0.9393727128473789, 0, 0.34289780745545123, 0, 0, 1, 0, 0,
 								-0.34289780745545123, 0, -0.9393727128473789, 0, 0, 0.35, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.35, 0],
+								"left_rotation": [0, 0.9847265389049334, 0, -0.17410813759359592],
+								"scale": [0.9999999999999999, 1, 0.9999999999999999]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.4,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.4, 0],
@@ -141,12 +242,24 @@
 							"matrix": [
 								-0.9210609940028851, 0, 0.38941834230865036, 0, 0, 1, 0, 0,
 								-0.38941834230865036, 0, -0.9210609940028851, 0, 0, 0.4, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.4, 0],
+								"left_rotation": [0, 0.9800665778412416, 0, -0.19866933079506116],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.45,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.45, 0],
@@ -156,12 +269,24 @@
 							"matrix": [
 								-0.9004471023526769, 0, 0.4349655341112301, 0, 0, 1, 0, 0,
 								-0.4349655341112301, 0, -0.9004471023526769, 0, 0, 0.45, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.45, 0],
+								"left_rotation": [0, 0.9747941070689433, 0, -0.22310636213174545],
+								"scale": [0.9999999999999999, 1, 0.9999999999999999]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				},
 				{
 					"time": 0.5,
+					"variants": null,
+					"variants_execute_condition": null,
+					"function": null,
+					"function_execute_condition": null,
 					"node_transforms": {
 						"fixture-bone": {
 							"pos": [0, 0.5, 0],
@@ -171,7 +296,15 @@
 							"matrix": [
 								-0.8775825618903729, 0, 0.4794255386042029, 0, 0, 1, 0, 0,
 								-0.4794255386042029, 0, -0.8775825618903729, 0, 0, 0.5, 0, 1
-							]
+							],
+							"decomposed": {
+								"translation": [0, 0.5, 0],
+								"left_rotation": [0, 0.9689124217106448, 0, -0.24740395925452285],
+								"scale": [1, 1, 1]
+							},
+							"interpolation": null,
+							"function": null,
+							"function_execute_condition": null
 						}
 					}
 				}
