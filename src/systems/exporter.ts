@@ -130,11 +130,13 @@ async function actuallyExportProject({
 		PROGRESS_DESCRIPTION.set('Hashing Rendered Objects...')
 		const rigHash = hashRig(rig)
 		let animationHash = hashAnimations(animations)
-		// TSB Optimized Export : hashAnimations は量子化前の raw float (pos/rot/scale) で
+		// TSB Optimized Export : hashAnimations は量子化前の raw float (matrix / pos / rot / scale) で
 		// 計算するため、 `tsb_quantization_digits_default` を変えても hash 不変 =
 		// on_load の reload-skip 判定 (= 同一 hash で init_queue スキップ) で新桁数の
 		// anim cell が load されない。 桁数を hash 入力に混ぜることで桁数変更も hash 動的に
 		// 反応 → init_queue 走行 → 新 cell load。
+		// (量子化桁数は render 結果のどのフィールドにも現れないので、 hash に matrix を混ぜた後も
+		//  この補正は依然として必要)
 		if (aj.tsb_optimized_export) {
 			const crypto = require('crypto')
 			animationHash = crypto

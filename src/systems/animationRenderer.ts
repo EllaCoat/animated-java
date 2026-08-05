@@ -11,6 +11,17 @@ import { VanillaBlockDisplay } from '../outliner/vanillaBlockDisplay'
 import { VanillaItemDisplay } from '../outliner/vanillaItemDisplay'
 import { sanitizeStorageKey } from '../util/minecraftUtil'
 import { eulerFromQuaternion, roundToNth, scrubUndefined } from '../util/misc'
+import {
+	beginRenderingSession,
+	dispatchBeginAnimation,
+	dispatchEndAnimation,
+	dispatchPose,
+	endRenderingSession,
+	hasRenderHooks,
+	type RenderAnimationContext,
+	shouldDispatchPose,
+	withRenderHooksSuppressed,
+} from './animationRenderHooks'
 import type { AnyRenderedNode, IRenderedRig } from './rigRenderer'
 import { sleepForAnimationFrame } from './util'
 
@@ -124,10 +135,22 @@ let lastFrameCache = new Map<string, LastFrameCacheItem>()
 let keyframeCache = new Map<string, Map<number, _Keyframe | undefined>>()
 let excludedNodesCache = new Set<string>()
 let nodeCache = new Map<string, OutlinerElement>()
+/**
+ * hook context の animation 単位部分。 frame ごとに作り直さないよう `renderAnimation` が 1 回だけ組み立て、
+ * `updatePreview` の wrapper が読む。 session 非 active なら dispatch されないので stale でも害はない。
+ */
+let currentRenderContext: RenderAnimationContext | undefined
+
+/** animation の除外ノード uuid 集合を作る。 `getFrame` の cache と hook context の両方から使う。 */
+function collectExcludedNodeUuids(animation: _Animation): Set<string> {
+	return new Set(animation.excluded_nodes ? animation.excluded_nodes.map(b => b.value) : [])
+}
+
 export function getFrame(
 	animation: _Animation,
 	nodeMap: IRenderedRig['nodes'],
-	time = 0
+	time = 0,
+	frameIndex: number
 ): IRenderedFrame {
 	const frame: IRenderedFrame = {
 		time,
@@ -148,9 +171,7 @@ export function getFrame(
 				: new Map<number, _Keyframe>()
 			keyframeCache.set(uuid, keyframeMap)
 		}
-		excludedNodesCache = new Set(
-			animation.excluded_nodes ? animation.excluded_nodes.map(b => b.value) : []
-		)
+		excludedNodesCache = collectExcludedNodeUuids(animation)
 		nodeCache = new Map()
 		for (const node of getAnimatableNodes()) {
 			nodeCache.set(node.uuid, node)
@@ -164,7 +185,8 @@ export function getFrame(
 		const keyframes = keyframeCache.get(uuid)
 		if (!keyframes) continue
 		const keyframe = keyframes.get(time)
-		const prevKeyframe = keyframes.get(time - 0.05)
+		// keyframeCache のキーは格子に正規化済みなので、引く側も再スナップしないと浮動小数誤差で外れる
+		const prevKeyframe = keyframes.get(roundToNth(time - 0.05, 20))
 		const lastFrame = lastFrameCache.get(uuid)
 
 		const transform = {} as INodeTransform
@@ -179,7 +201,7 @@ export function getFrame(
 				if (node.parent && node.parent !== 'root') {
 					const parentKeyframes = keyframeCache.get(node.parent)
 					const parentKeyframe = parentKeyframes?.get(time)
-					const prevParentKeyframe = parentKeyframes?.get(time - 0.05)
+					const prevParentKeyframe = parentKeyframes?.get(roundToNth(time - 0.05, 20))
 					if (parentKeyframe?.interpolation === 'step') {
 						transform.interpolation = 'step'
 					} else if (prevParentKeyframe?.data_points.length === 2) {
@@ -198,10 +220,10 @@ export function getFrame(
 					transform.interpolation = 'step'
 				} else if (prevKeyframe?.data_points.length === 2) {
 					transform.interpolation = 'pre-post'
-					updatePreview(animation, time + 0.001)
+					updatePreview(animation, time + 0.001, frameIndex)
 					const postMatrix = getNodeMatrix(outlinerNode, node.base_scale)
 					transform.matrix = postMatrix
-					updatePreview(animation, time)
+					updatePreview(animation, time, frameIndex)
 				}
 
 				lastFrameCache.set(uuid, { matrix: transform.matrix, keyframe })
@@ -228,7 +250,7 @@ export function getFrame(
 				break
 			}
 			case 'null_object':
-				updatePreview(animation, time)
+				updatePreview(animation, time, frameIndex)
 			case 'camera':
 			case 'struct': {
 				transform.matrix = getNodeMatrix(outlinerNode, 1)
@@ -298,7 +320,11 @@ function getFunctionKeyframe(
 	return {}
 }
 
-export function updatePreview(animation: _Animation, time: number) {
+/**
+ * keyframe pose を scene へ確定させるだけの素の評価。 hook を一切呼ばない。
+ * effects の表示は含まない (= hook が pose を書き換える前に effects に読ませないため wrapper 側に置く)。
+ */
+function updatePreviewBase(animation: _Animation, time: number) {
 	Timeline.time = time
 	Animator.showDefaultPose(true)
 	const nodes: OutlinerNode[] = getAnimatableNodes()
@@ -309,7 +335,58 @@ export function updatePreview(animation: _Animation, time: number) {
 	}
 	Animator.resetLastValues()
 	Canvas.scene.updateMatrixWorld(true)
+}
+
+export function updatePreview(animation: _Animation, time: number, frameIndex: number) {
+	updatePreviewBase(animation, time)
+	// hook は scene の node pose を直接書き換えるので、 pose 確定後・ effects が読む前に挟む
+	if (shouldDispatchPose() && currentRenderContext) {
+		dispatchPose({
+			...currentRenderContext,
+			frameIndex,
+			frameTimeSeconds: frameIndex / 20,
+			timeSeconds: time,
+		})
+	}
 	if (animation.effects) animation.effects.displayFrame()
+}
+
+/** 例外を 1 件だけ保持する箱。 2 件目以降は `console.warn` へ落とす。 */
+interface IErrorSlot {
+	failed: boolean
+	error?: unknown
+}
+
+function createErrorSlot(): IErrorSlot {
+	return { failed: false }
+}
+
+/**
+ * cleanup の 1 段。 throw しても後続の段を止めず、 例外は `slot` に集める
+ * (= 1 つの復元失敗が他の復元を巻き添えにしないため)。
+ */
+function runCleanupStep(slot: IErrorSlot, step: () => void) {
+	try {
+		step()
+	} catch (error) {
+		if (slot.failed) console.warn(error)
+		else {
+			slot.failed = true
+			slot.error = error
+		}
+	}
+}
+
+/**
+ * 本体と cleanup の例外を、 **本体優先**で送出する。
+ * 本体が throw していたら cleanup 側の例外は `console.warn` に落とす (= 元の例外を上書きしない)。
+ */
+function throwPreferringBody(body: IErrorSlot, cleanup: IErrorSlot) {
+	if (body.failed) {
+		if (cleanup.failed) console.warn(cleanup.error)
+		throw body.error
+	}
+	if (cleanup.failed) throw cleanup.error
 }
 
 function renderAnimation(animation: _Animation, rig: IRenderedRig) {
@@ -328,13 +405,54 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 
 	const includedNodes = new Set<string>()
 
-	for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
-		updatePreview(animation, time)
-		updatePreview(animation, time) // IK doesn't work unless I call this twice for some reason...
-		const frame: IRenderedFrame = getFrame(animation, rig.nodes, time)
-		Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
-		rendered.frames.push(frame)
+	currentRenderContext = {
+		animation,
+		rig,
+		excludedNodeUuids: collectExcludedNodeUuids(animation),
+		evaluateBasePose(timeSeconds: number) {
+			const previousTime = Timeline.time
+			try {
+				// この閉包は onPose の中から呼ばれうる (= 再入経路) ため、 防御として抑制下で回す
+				withRenderHooksSuppressed(() => {
+					updatePreviewBase(animation, timeSeconds)
+					updatePreviewBase(animation, timeSeconds) // IK doesn't work unless I call this twice for some reason...
+				})
+			} finally {
+				Timeline.time = previousTime
+			}
+		},
 	}
+	const bodyError = createErrorSlot()
+	const cleanupError = createErrorSlot()
+	// dispatchBeginAnimation が部分失敗したときの onEndAnimation は registry 側の unwind が
+	// 送るため、 この flag で cleanup 側の dispatchEndAnimation と二重にならないようにする
+	let animationBegun = false
+	try {
+		dispatchBeginAnimation(currentRenderContext)
+		animationBegun = true
+
+		let frameIndex = 0
+		for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+			updatePreview(animation, time, frameIndex)
+			updatePreview(animation, time, frameIndex) // IK doesn't work unless I call this twice for some reason...
+			const frame: IRenderedFrame = getFrame(animation, rig.nodes, time, frameIndex)
+			Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
+			rendered.frames.push(frame)
+			frameIndex++
+		}
+	} catch (error) {
+		bodyError.failed = true
+		bodyError.error = error
+	}
+
+	runCleanupStep(cleanupError, () => {
+		if (animationBegun) dispatchEndAnimation()
+	})
+	runCleanupStep(cleanupError, () => {
+		// dispatchEndAnimation の成否に関わらず context は必ず捨てる
+		currentRenderContext = undefined
+	})
+	throwPreferringBody(bodyError, cleanupError)
 
 	rendered.duration = rendered.frames.length
 	rendered.modified_nodes = Object.fromEntries(
@@ -357,6 +475,12 @@ export function hashAnimations(animations: IRenderedAnimation[]) {
 			hash.update(';' + frame.time.toString())
 			for (const [uuid, node] of Object.entries(frame.node_transforms)) {
 				hash.update(';' + uuid)
+				// matrix は pos / rot / scale の上位互換 (= それらは Matrix4.decompose の出力で、
+				// shear と right rotation を表現できない)。 一方 datapack compiler は matrix 全体を
+				// 使う (= TSB 経路は decomposeTsb の SVD、 純正経路は 16 要素をそのまま書き出す) ため、
+				// 派生値だけを mix すると 「出力は変わったのに hash は同じ」 = reload-skip の誤判定が起きる。
+				// 情報量が最大なので他のどの派生値よりも先に混ぜる。
+				hash.update(';' + node.matrix.elements.join(';'))
 				hash.update(';' + node.pos.join(';'))
 				hash.update(';' + node.rot.join(';'))
 				hash.update(';' + node.scale.join(';'))
@@ -400,43 +524,87 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 	excludedNodesCache = new Set()
 	nodeCache = new Map()
 
-	BONE_INTERPOLATION_ENABLED.set(false)
-
-	PROGRESS_DESCRIPTION.set('Rendering Animations...')
-	PROGRESS.set(0)
-	MAX_PROGRESS.set(project.animations.length)
-
+	// console.time は保護区間の外に置く。 cleanup の console.timeEnd が無条件に走るため、
+	// ここを try の中にすると time 未実行のまま timeEnd が呼ばれる経路ができる
 	console.time('Rendering animations took')
 	let selectedAnimation: _Animation | undefined
 	let currentTime = 0
-	Timeline.pause()
-	// Save selected animation
-	if (Mode.selected.id === 'animate') {
-		selectedAnimation = Animator.selected
-		currentTime = Timeline.time
-	}
-
-	correctSceneAngle()
 	const animations: IRenderedAnimation[] = []
-	for (const animation of project.animations) {
-		animations.push(renderAnimation(animation, rig))
-		PROGRESS.set(PROGRESS.get() + 1)
-		await sleepForAnimationFrame()
+	let sceneAngleCorrected = false
+
+	const bodyError = createErrorSlot()
+	const cleanupError = createErrorSlot()
+	// この呼び出しが session を開いたかどうか。 開いた側だけが閉じる
+	// (= 並行に走ったもう 1 本の cleanup が、 こちらの session を終わらせないため)
+	let sessionStarted = false
+
+	// 途中で例外が出ても bone interpolation / scene angle / 選択中 animation を必ず入口の状態へ戻す。
+	// interpolation フラグを倒すのは try に入ってから (= 直後の PROGRESS 系 subscriber が throw しても
+	// false のまま取り残されないようにするため)
+	try {
+		BONE_INTERPOLATION_ENABLED.set(false)
+
+		PROGRESS_DESCRIPTION.set('Rendering Animations...')
+		PROGRESS.set(0)
+		MAX_PROGRESS.set(project.animations.length)
+
+		Timeline.pause()
+		// Save selected animation
+		if (Mode.selected.id === 'animate') {
+			selectedAnimation = Animator.selected
+			currentTime = Timeline.time
+		}
+		// 退避より後に session を開く (= hook の onBeginRendering が選択状態を書き換えても、
+		// 書き換え後の状態を「元の状態」として保存しないため)。
+		// hook が 1 つも無いときは session 自体を張らない (= 従来の挙動と完全に同一にするため)
+		if (hasRenderHooks()) {
+			beginRenderingSession()
+			sessionStarted = true
+		}
+
+		// correctSceneAngle が 2 行の途中で throw しても復元を試みられるよう、 先にフラグを立てる
+		sceneAngleCorrected = true
+		correctSceneAngle()
+		for (const animation of project.animations) {
+			animations.push(renderAnimation(animation, rig))
+			PROGRESS.set(PROGRESS.get() + 1)
+			await sleepForAnimationFrame()
+		}
+	} catch (error) {
+		bodyError.failed = true
+		bodyError.error = error
 	}
-	restoreSceneAngle()
 
-	BONE_INTERPOLATION_ENABLED.set(true)
+	// 選択状態の復元先は cleanup 開始時点の Mode で 1 回だけ判定し、 各 step で使い回す
+	const animationToRestore = Mode.selected.id === 'animate' ? selectedAnimation : undefined
+	const restoreDefaultPose = !animationToRestore && Mode.selected.id === 'edit'
 
-	// Restore selected animation
-	if (Mode.selected.id === 'animate' && selectedAnimation) {
-		selectedAnimation.select()
-		Timeline.setTime(currentTime)
-		Animator.preview()
-	} else if (Mode.selected.id === 'edit') {
-		Animator.showDefaultPose()
-	}
+	// session の終了は Animator.preview() (= display_animation_frame の発火) より前に済ませる
+	runCleanupStep(cleanupError, () => {
+		if (sessionStarted) endRenderingSession()
+	})
+	runCleanupStep(cleanupError, () => {
+		if (sceneAngleCorrected) restoreSceneAngle()
+	})
+	runCleanupStep(cleanupError, () => BONE_INTERPOLATION_ENABLED.set(true))
+	// Restore selected animation (= 1 つが throw しても残りが走るよう操作ごとに分ける)
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) animationToRestore.select()
+	})
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) Timeline.setTime(currentTime)
+	})
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) Animator.preview()
+	})
+	runCleanupStep(cleanupError, () => {
+		if (restoreDefaultPose) Animator.showDefaultPose()
+	})
+	runCleanupStep(cleanupError, () => console.timeEnd('Rendering animations took'))
 
-	console.timeEnd('Rendering animations took')
+	// 元の例外を cleanup の例外で上書きしない
+	throwPreferringBody(bodyError, cleanupError)
+
 	console.log('Animations:', animations)
 	return animations
 }
