@@ -12,6 +12,9 @@
  * 4.  `onPose` の `frameIndex` が 0 から 1 ずつ進み、 同じ値で複数回呼ばれること
  * 5.  `frameTimeSeconds` が frame ループの `time` と全 frame で一致すること
  * 6.  hook が throw しても global 状態 (interpolation フラグ / scene angle) が復旧すること
+ * 6b. 本体と `onEndAnimation` が両方 throw したとき、 本体側の例外が伝播すること
+ * 6c. cleanup の 1 段が throw しても、 残りの段が走ること
+ * 6d. 自分が開いていない session を cleanup で終わらせないこと
  * 7.  `onPose` の中から `evaluateBasePose` を呼べて、 `Timeline.time` が戻ること
  * 8.  1 と 2 の render 結果で、 生成される mcfunction が byte 単位で違うこと
  *
@@ -134,6 +137,9 @@ import {
 	renderProjectAnimations,
 } from '../systems/animationRenderer'
 import {
+	beginRenderingSession,
+	endRenderingSession,
+	isRenderingSessionActive,
 	RenderHookError,
 	registerRenderHooks,
 	type RenderHookContext,
@@ -378,6 +384,96 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		// (d) scene の 180 度回転が戻っている (= 単位 quaternion)
 		expect(harness.scene.quaternion.w).toBeCloseTo(1, 9)
 		expect(harness.scene.quaternion.y).toBeCloseTo(0, 9)
+	})
+
+	it('6b. onPose と onEndAnimation が両方 throw したら onPose 由来が伝播する', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		const poseCause = new Error('pose exploded')
+		const endCause = new Error('cleanup exploded')
+		registerRenderHooks(HOOK_ID, {
+			onPose() {
+				throw poseCause
+			},
+			onEndAnimation() {
+				throw endCause
+			},
+		})
+
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+
+		// 本体 (= frame ループ内の onPose) 由来が優先される。
+		expect(caught).toBeInstanceOf(RenderHookError)
+		expect((caught as RenderHookError).phase).toBe('onPose')
+		expect((caught as RenderHookError).cause).toBe(poseCause)
+
+		// cleanup (= onEndAnimation) 由来は console.warn に落ちる。
+		const warned = warn.mock.calls
+			.map(call => call[0])
+			.filter(
+				(arg): arg is RenderHookError =>
+					arg instanceof RenderHookError && arg.phase === 'onEndAnimation'
+			)
+		expect(warned.length).toBe(1)
+		expect(warned[0].cause).toBe(endCause)
+		warn.mockRestore()
+	})
+
+	it('6c. 選択 animation の復元は select() が throw しても setTime / preview が走る', async () => {
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		const animation = harness.project.animations[0] as unknown as {
+			select: () => void
+		}
+		// renderAnimation が冒頭で 1 回呼ぶので、 cleanup 側の 2 回目だけ throw させる。
+		let selectCalls = 0
+		const selectCause = new Error('select exploded')
+		animation.select = () => {
+			selectCalls++
+			if (selectCalls >= 2) throw selectCause
+		}
+		let previewCalls = 0
+		globals().Animator.preview = () => {
+			previewCalls++
+		}
+		// cleanup の setTime がこの値へ戻すことを確認する (= frame ループ後の時刻と区別できる値)。
+		globals().Timeline.time = 0.3
+
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+
+		// 本体は正常終了しているので、 cleanup 側の例外がそのまま出る。
+		expect(caught).toBe(selectCause)
+		expect(selectCalls).toBe(2)
+		// select() が throw しても後続の 2 step が走っている。
+		expect(globals().Timeline.time).toBe(0.3)
+		expect(previewCalls).toBe(1)
+	})
+
+	it('6d. 自分が開いていない session を cleanup で終わらせない', async () => {
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		registerRenderHooks(HOOK_ID, { onPose() {} })
+
+		// 別の render が既に session を開いている状況を作る (= 並行実行の再現)。
+		beginRenderingSession()
+		expect(isRenderingSessionActive()).toBe(true)
+
+		// 2 本目は beginRenderingSession が「既に active」で throw する。
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+		expect(caught).toBeInstanceOf(Error)
+
+		// 2 本目の cleanup は自分が開いた session ではないので閉じない。
+		expect(isRenderingSessionActive()).toBe(true)
+
+		endRenderingSession()
+		expect(isRenderingSessionActive()).toBe(false)
 	})
 
 	it('7. onPose の中から evaluateBasePose を呼べて Timeline.time が戻る', async () => {

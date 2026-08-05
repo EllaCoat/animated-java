@@ -351,6 +351,44 @@ export function updatePreview(animation: _Animation, time: number, frameIndex: n
 	if (animation.effects) animation.effects.displayFrame()
 }
 
+/** 例外を 1 件だけ保持する箱。 2 件目以降は `console.warn` へ落とす。 */
+interface IErrorSlot {
+	failed: boolean
+	error?: unknown
+}
+
+function createErrorSlot(): IErrorSlot {
+	return { failed: false }
+}
+
+/**
+ * cleanup の 1 段。 throw しても後続の段を止めず、 例外は `slot` に集める
+ * (= 1 つの復元失敗が他の復元を巻き添えにしないため)。
+ */
+function runCleanupStep(slot: IErrorSlot, step: () => void) {
+	try {
+		step()
+	} catch (error) {
+		if (slot.failed) console.warn(error)
+		else {
+			slot.failed = true
+			slot.error = error
+		}
+	}
+}
+
+/**
+ * 本体と cleanup の例外を、 **本体優先**で送出する。
+ * 本体が throw していたら cleanup 側の例外は `console.warn` に落とす (= 元の例外を上書きしない)。
+ */
+function throwPreferringBody(body: IErrorSlot, cleanup: IErrorSlot) {
+	if (body.failed) {
+		if (cleanup.failed) console.warn(cleanup.error)
+		throw body.error
+	}
+	if (cleanup.failed) throw cleanup.error
+}
+
 function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 	const rendered = {
 		name: animation.name,
@@ -384,28 +422,37 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 			}
 		},
 	}
+	const bodyError = createErrorSlot()
+	const cleanupError = createErrorSlot()
+	// dispatchBeginAnimation が部分失敗したときの onEndAnimation は registry 側の unwind が
+	// 送るため、 この flag で cleanup 側の dispatchEndAnimation と二重にならないようにする
+	let animationBegun = false
 	try {
-		// 部分失敗時の onEndAnimation は registry 側の unwind が送るので、
-		// この呼び出しは内側の try (= dispatchEndAnimation を伴う方) には含めない
 		dispatchBeginAnimation(currentRenderContext)
+		animationBegun = true
 
-		try {
-			let frameIndex = 0
-			for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
-				updatePreview(animation, time, frameIndex)
-				updatePreview(animation, time, frameIndex) // IK doesn't work unless I call this twice for some reason...
-				const frame: IRenderedFrame = getFrame(animation, rig.nodes, time, frameIndex)
-				Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
-				rendered.frames.push(frame)
-				frameIndex++
-			}
-		} finally {
-			dispatchEndAnimation()
+		let frameIndex = 0
+		for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+			updatePreview(animation, time, frameIndex)
+			updatePreview(animation, time, frameIndex) // IK doesn't work unless I call this twice for some reason...
+			const frame: IRenderedFrame = getFrame(animation, rig.nodes, time, frameIndex)
+			Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
+			rendered.frames.push(frame)
+			frameIndex++
 		}
-	} finally {
+	} catch (error) {
+		bodyError.failed = true
+		bodyError.error = error
+	}
+
+	runCleanupStep(cleanupError, () => {
+		if (animationBegun) dispatchEndAnimation()
+	})
+	runCleanupStep(cleanupError, () => {
 		// dispatchEndAnimation の成否に関わらず context は必ず捨てる
 		currentRenderContext = undefined
-	}
+	})
+	throwPreferringBody(bodyError, cleanupError)
 
 	rendered.duration = rendered.frames.length
 	rendered.modified_nodes = Object.fromEntries(
@@ -483,26 +530,11 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 	const animations: IRenderedAnimation[] = []
 	let sceneAngleCorrected = false
 
-	let bodyError: unknown
-	let bodyFailed = false
-	let cleanupError: unknown
-	let cleanupFailed = false
-
-	/**
-	 * cleanup の 1 段。 throw しても残りの段を止めず、 最初の例外だけ保持して以降は `console.warn`
-	 * に落とす (= 1 つの復元失敗が他の復元を巻き添えにしないため)。
-	 */
-	function runCleanupStep(step: () => void) {
-		try {
-			step()
-		} catch (error) {
-			if (cleanupFailed) console.warn(error)
-			else {
-				cleanupFailed = true
-				cleanupError = error
-			}
-		}
-	}
+	const bodyError = createErrorSlot()
+	const cleanupError = createErrorSlot()
+	// この呼び出しが session を開いたかどうか。 開いた側だけが閉じる
+	// (= 並行に走ったもう 1 本の cleanup が、 こちらの session を終わらせないため)
+	let sessionStarted = false
 
 	// 途中で例外が出ても bone interpolation / scene angle / 選択中 animation を必ず入口の状態へ戻す
 	try {
@@ -515,7 +547,10 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 		// 退避より後に session を開く (= hook の onBeginRendering が選択状態を書き換えても、
 		// 書き換え後の状態を「元の状態」として保存しないため)。
 		// hook が 1 つも無いときは session 自体を張らない (= 従来の挙動と完全に同一にするため)
-		if (hasRenderHooks()) beginRenderingSession()
+		if (hasRenderHooks()) {
+			beginRenderingSession()
+			sessionStarted = true
+		}
 
 		// correctSceneAngle が 2 行の途中で throw しても復元を試みられるよう、 先にフラグを立てる
 		sceneAngleCorrected = true
@@ -526,34 +561,39 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 			await sleepForAnimationFrame()
 		}
 	} catch (error) {
-		bodyFailed = true
-		bodyError = error
+		bodyError.failed = true
+		bodyError.error = error
 	}
+
+	// 選択状態の復元先は cleanup 開始時点の Mode で 1 回だけ判定し、 各 step で使い回す
+	const animationToRestore = Mode.selected.id === 'animate' ? selectedAnimation : undefined
+	const restoreDefaultPose = !animationToRestore && Mode.selected.id === 'edit'
 
 	// session の終了は Animator.preview() (= display_animation_frame の発火) より前に済ませる
-	runCleanupStep(() => endRenderingSession())
-	runCleanupStep(() => {
+	runCleanupStep(cleanupError, () => {
+		if (sessionStarted) endRenderingSession()
+	})
+	runCleanupStep(cleanupError, () => {
 		if (sceneAngleCorrected) restoreSceneAngle()
 	})
-	runCleanupStep(() => BONE_INTERPOLATION_ENABLED.set(true))
-	runCleanupStep(() => {
-		// Restore selected animation
-		if (Mode.selected.id === 'animate' && selectedAnimation) {
-			selectedAnimation.select()
-			Timeline.setTime(currentTime)
-			Animator.preview()
-		} else if (Mode.selected.id === 'edit') {
-			Animator.showDefaultPose()
-		}
+	runCleanupStep(cleanupError, () => BONE_INTERPOLATION_ENABLED.set(true))
+	// Restore selected animation (= 1 つが throw しても残りが走るよう操作ごとに分ける)
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) animationToRestore.select()
 	})
-	runCleanupStep(() => console.timeEnd('Rendering animations took'))
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) Timeline.setTime(currentTime)
+	})
+	runCleanupStep(cleanupError, () => {
+		if (animationToRestore) Animator.preview()
+	})
+	runCleanupStep(cleanupError, () => {
+		if (restoreDefaultPose) Animator.showDefaultPose()
+	})
+	runCleanupStep(cleanupError, () => console.timeEnd('Rendering animations took'))
 
 	// 元の例外を cleanup の例外で上書きしない
-	if (bodyFailed) {
-		if (cleanupFailed) console.warn(cleanupError)
-		throw bodyError
-	}
-	if (cleanupFailed) throw cleanupError
+	throwPreferringBody(bodyError, cleanupError)
 
 	console.log('Animations:', animations)
 	return animations
