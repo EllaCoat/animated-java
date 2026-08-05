@@ -17,6 +17,7 @@
  */
 import * as THREE from 'three'
 
+import type { IRenderedAnimation } from '../../systems/animationRenderer'
 import type { AnyRenderedNode, IRenderedRig } from '../../systems/rigRenderer'
 
 /** frame ループの刻み幅 (= 1 tick)。 */
@@ -63,6 +64,45 @@ export class HarnessBone {
 		this.mesh.rotation.set(0, time, 0)
 		this.mesh.scale.set(1, 1, 1)
 	}
+}
+
+/**
+ * `renderProjectAnimations` の戻り値を golden 比較用の安定した形へ落とす。
+ *
+ * `THREE.Matrix4` / `Vector3` / `Quaternion` をそのまま JSON 化すると three の内部表現
+ * (= `_x` 等) に依存するため、 数値配列だけを取り出す。 丸めはしない (= bit 単位で比較する)。
+ *
+ * **この関数は golden の生成側 (= main worktree) と比較側の両方で使うので、
+ * 変更すると既存 golden と一致しなくなる**。
+ */
+export function serializeAnimations(animations: readonly IRenderedAnimation[]) {
+	return animations.map(animation => ({
+		name: animation.name,
+		storage_name: animation.storage_name,
+		uuid: animation.uuid,
+		loop_delay: animation.loop_delay,
+		duration: animation.duration,
+		loop_mode: animation.loop_mode,
+		modified_nodes: Object.keys(animation.modified_nodes).sort(),
+		frames: animation.frames.map(frame => ({
+			time: frame.time,
+			node_transforms: Object.fromEntries(
+				Object.entries(frame.node_transforms).map(([uuid, transform]) => [
+					uuid,
+					{
+						pos: transform.pos,
+						rot: transform.rot,
+						scale: transform.scale,
+						head_rot: transform.head_rot,
+						matrix: Array.from(transform.matrix.elements),
+						...(transform.interpolation
+							? { interpolation: transform.interpolation }
+							: {}),
+					},
+				])
+			),
+		})),
+	}))
 }
 
 export interface HarnessOptions {

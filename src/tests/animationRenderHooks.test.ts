@@ -80,19 +80,27 @@ describe('animationRenderHooks - registry', () => {
 		expect(hasRenderHooks()).toBe(false)
 	})
 
-	it('重複 id の登録は throw し、 上書きしない', () => {
-		const first = { onPose: () => {} }
-		registerRenderHooks('a', first)
-		expect(() => registerRenderHooks('a', { onPose: () => {} })).toThrow()
-
-		// 上書きされていないことを、 元の hook が呼ばれることで確認する
+	it('重複 id の登録は throw し、 最初の hooks を保持する (= 上書きしない)', () => {
 		const log: string[] = []
-		unregisterRenderHooks('a')
-		registerRenderHooks('a', { onPose: () => log.push('first') })
+		registerRenderHooks('a', makeProbe('first', log))
+
+		expect(() => registerRenderHooks('a', makeProbe('second', log))).toThrow()
+
+		// throw 後も registry には最初の hooks が残っている (= 解除 / 再登録を挟まずに確認する)。
 		beginRenderingSession()
+		dispatchBeginAnimation(makeAnimationContext())
 		dispatchPose(makePoseContext())
+		dispatchEndAnimation()
 		endRenderingSession()
-		expect(log).toEqual(['first'])
+
+		expect(log).toEqual([
+			'first:beginRendering',
+			'first:beginAnimation',
+			'first:pose',
+			'first:endAnimation',
+			'first:endRendering',
+		])
+		expect(log.some(entry => entry.startsWith('second:'))).toBe(false)
 	})
 
 	it('未登録 id の解除は throw しない (= 冪等)', () => {

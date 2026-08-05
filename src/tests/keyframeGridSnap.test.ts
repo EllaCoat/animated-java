@@ -2,8 +2,9 @@
  * 「1 tick 前の keyframe」 引きの格子スナップ単体テスト。 純粋な算術なので Blockbench global 不要。
  *
  * keyframeCache のキーは load 時に `roundToNth(kf.time, 20)` で格子へ正規化される
- * (`src/mods/animation.ts:70`) 一方、 frame ループの `time` も毎ステップ
- * `roundToNth(time + 0.05, 20)` で再スナップされる (`src/systems/animationRenderer.ts:331`)。
+ * (= `src/mods/animation.ts` の extend override 内の正規化ループ) 一方、 frame ループの `time` も
+ * 毎ステップ `roundToNth(time + 0.05, 20)` で再スナップされる
+ * (= `src/systems/animationRenderer.ts` の `renderAnimation` の frame ループ)。
  * ところが引く側の `time - 0.05` だけは正規化を通っておらず、 減算結果が格子から外れて
  * `Map.get` がヒットしない frame が出る (= pre-post interpolation の指定が出力から落ちる)。
  *
@@ -27,7 +28,8 @@ const SNAPPING = 20
 const LENGTH = 3
 
 /**
- * keyframe 側のキー集合を `src/mods/animation.ts:70` と同じ式で作る。
+ * keyframe 側のキー集合を `src/mods/animation.ts` の正規化式 (`roundToNth(kf.time,
+ * DEFAULT_SNAPPING_VALUE)`) と同じ形で作る。
  * 0〜3 秒の全 tick 位置に keyframe が置かれている状況を想定する。
  */
 function buildKeyframeKeys(): Set<number> {
@@ -39,7 +41,7 @@ function buildKeyframeKeys(): Set<number> {
 }
 
 /**
- * `src/systems/animationRenderer.ts:331` と同じ式で frame ループを回し、
+ * `src/systems/animationRenderer.ts` の `renderAnimation` の frame ループと同じ式で回し、
  * 各 frame の `time` を列挙する。
  */
 function collectFrameTimes(): number[] {
