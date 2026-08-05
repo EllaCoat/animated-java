@@ -11,9 +11,13 @@
  * global を要求するため、 global を後から生やす方式では越えられない)。 mock の実体は
  * `animationRenderExport.test.ts` を参照。
  *
- * three は Blockbench が runtime 供給するもの (= 本 repo の直接依存ではない) だが、
+ * production では three を Blockbench が runtime 供給する (= plugin は bundle に含めない) が、
  * `matrixWorld` の階層計算を本物で回さないと出力が検証できないため、 harness では実物を
- * `globalThis.THREE` に載せる。
+ * `globalThis.THREE` に載せる。 そのため three は **テスト用の devDependency として明示的に
+ * 宣言してある** (= `package.json` の `three: ^0.134.0`。 Blockbench 5.1.4 は r129 相当だが、
+ * `wintersky` が `^0.134.0` を要求しており、 別 version を足すと three が 2 コピー同居するため
+ * 0.134 に揃えた。 harness が使う `Object3D` / `Matrix4` / `Vector3` / `Quaternion` / `Euler` に
+ * r129 → r134 の破壊的変更は無い)。
  */
 import * as THREE from 'three'
 
@@ -69,12 +73,16 @@ export class HarnessBone {
 /**
  * `renderProjectAnimations` の戻り値を golden 比較用の安定した形へ落とす。
  *
- * `IRenderedAnimation` / `IRenderedFrame` / `INodeTransform` の **export に効くフィールドを
- * 網羅する**。 `THREE.Matrix4` / `Vector3` / `Quaternion` をそのまま JSON 化すると three の
- * 内部表現 (= `_x` 等) に依存するため、 数値配列へ落とす。 丸めはしない (= bit 単位で比較する)。
+ * **含むもの** : `IRenderedAnimation` の全スカラーフィールド (= `name` / `storage_name` / `uuid` /
+ * `loop_delay` / `duration` / `loop_mode` / `tsb_priority`) と、 `IRenderedFrame` /
+ * `INodeTransform` の全フィールド (= `matrix` の 16 要素と `decomposed` を含む)。
+ * `THREE.Matrix4` / `Vector3` / `Quaternion` はそのまま JSON 化すると three の内部表現
+ * (= `_x` 等) に依存するため数値配列へ落とす。 丸めはしない (= bit 単位で比較する)。
  *
- * `modified_nodes` だけは node 全体だと巨大になるので uuid の一覧 (ソート済み) にしている。
- * `hashAnimations` が mix しているのも `Object.keys(modified_nodes)` なので粒度が揃う。
+ * **含まないもの** : `modified_nodes` の node 本体。 uuid の一覧 (ソート済み) へ縮約しており、
+ * node の `type` / `storage_name` / `default_transform` 等は比較対象に入っていない。
+ * `hashAnimations` が mix しているのも `Object.keys(modified_nodes)` なので、 それと粒度を
+ * 合わせた形 (= node 本体の中身は rig 側の責務で、 animation の render 結果ではないため)。
  *
  * optional フィールドは `undefined` ではなく `null` に正規化する
  * (= JSON 化で key ごと消えて比較が緩くなるのを防ぐため)。

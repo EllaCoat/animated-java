@@ -518,12 +518,8 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 	excludedNodesCache = new Set()
 	nodeCache = new Map()
 
-	BONE_INTERPOLATION_ENABLED.set(false)
-
-	PROGRESS_DESCRIPTION.set('Rendering Animations...')
-	PROGRESS.set(0)
-	MAX_PROGRESS.set(project.animations.length)
-
+	// console.time は保護区間の外に置く。 cleanup の console.timeEnd が無条件に走るため、
+	// ここを try の中にすると time 未実行のまま timeEnd が呼ばれる経路ができる
 	console.time('Rendering animations took')
 	let selectedAnimation: _Animation | undefined
 	let currentTime = 0
@@ -536,8 +532,16 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 	// (= 並行に走ったもう 1 本の cleanup が、 こちらの session を終わらせないため)
 	let sessionStarted = false
 
-	// 途中で例外が出ても bone interpolation / scene angle / 選択中 animation を必ず入口の状態へ戻す
+	// 途中で例外が出ても bone interpolation / scene angle / 選択中 animation を必ず入口の状態へ戻す。
+	// interpolation フラグを倒すのは try に入ってから (= 直後の PROGRESS 系 subscriber が throw しても
+	// false のまま取り残されないようにするため)
 	try {
+		BONE_INTERPOLATION_ENABLED.set(false)
+
+		PROGRESS_DESCRIPTION.set('Rendering Animations...')
+		PROGRESS.set(0)
+		MAX_PROGRESS.set(project.animations.length)
+
 		Timeline.pause()
 		// Save selected animation
 		if (Mode.selected.id === 'animate') {

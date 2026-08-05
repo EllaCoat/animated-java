@@ -21,6 +21,17 @@
  *   同じ `frameIndex` に対しては何度呼ばれても結果が変わらない (= 冪等) 実装が要る
  * - `timeSeconds` は `frameTimeSeconds` と一致しないことがある (= pre-post の side sample では
  *   `frameTimeSeconds + 0.001`)。時刻の正本は `frameIndex` であり、 `timeSeconds` は参考値として扱う
+ * - **hook が加える変化は `pos` / `rot` / `scale` のいずれかに現れる形にすること**。
+ *   `hashAnimations` が node transform から mix するのは `pos` / `rot` / `scale` と
+ *   `interpolation` / `function` 系だけで、 `matrix` も `decomposed` も mix しない。 その `pos` /
+ *   `rot` / `scale` は `THREE.Matrix4.decompose` で得た T・R・S であり、 **shear と right rotation を
+ *   表現できない**。 一方 datapack compiler は matrix 全体を使う (= TSB 経路は `matrix.elements` を
+ *   SVD 分解する `decomposeTsb`、 純正経路は `matrixToNbtFloatArray(transform.matrix)` で 16 要素を
+ *   そのまま書き出す)。 したがって **shear や right rotation だけを動かす変換は、 mcfunction の中身が
+ *   変わっても hash が一致しうる** (= 非一様 scale と回転を組み合わせた場合に起きる)。 その場合 AJ の
+ *   reload-skip 判定が 「変更なし」 と誤判定して、 新しい datapack が反映されないことがある。
+ *   これは hook 側の落ち度ではなく **AJ の既存 hash の制約**だが、 hash の入力を変えると既存 blueprint の
+ *   hash が全て変わって datapack の全再生成が要るため、 本 PR では変更していない
  *
  * この module は Blockbench / THREE の global を実行時に参照しない (= 型は `import type` と ambient のみ)。
  */

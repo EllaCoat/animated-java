@@ -114,7 +114,12 @@ function compareVersionsImpl(versionA: string, versionB: string): boolean {
 
 /**
  * `THREE.Matrix4` の最小 stub。 `matrixToNbtFloatArray` が使う copy / transpose / toArray
- * だけを持つ (= three は本 repo の依存に含まれず、 Blockbench が runtime で供給するため)。
+ * だけを持つ。
+ *
+ * three 自体は devDependency として入っている (= `renderHarness.ts` が実物を使う) が、
+ * この fixture は matrix 演算を必要とせず identity を配るだけなので、 stub のまま据え置く。
+ * `installGlobals` の `g.THREE ??=` は既に実物が載っていれば上書きしないので、
+ * harness と同一プロセスで動いても衝突しない。
  */
 class Matrix4Stub {
 	elements: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
