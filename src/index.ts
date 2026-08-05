@@ -36,6 +36,7 @@ import { VanillaItemDisplay } from './outliner/vanillaItemDisplay'
 import { checkForIncompatabilities } from './popups/incompatability/incompatability'
 import { openInstallPopup } from './popups/installed/installed'
 import './prism/mcfunctionPrism'
+import { RENDER_HOOKS_API } from './systems/animationRenderHooks'
 import { cleanupExportedFiles } from './systems/cleaner'
 import TELLRAW from './systems/datapackCompiler/tellraw'
 import { exportProject } from './systems/exporter'
@@ -112,6 +113,7 @@ const AnimatedJavaApi = {
 	},
 	TELLRAW,
 	getBlockState,
+	renderHooks: RENDER_HOOKS_API,
 }
 window.AnimatedJava = AnimatedJavaApi
 
