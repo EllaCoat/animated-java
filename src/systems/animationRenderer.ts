@@ -409,34 +409,42 @@ export async function renderProjectAnimations(project: ModelProject, rig: IRende
 	console.time('Rendering animations took')
 	let selectedAnimation: _Animation | undefined
 	let currentTime = 0
-	Timeline.pause()
-	// Save selected animation
-	if (Mode.selected.id === 'animate') {
-		selectedAnimation = Animator.selected
-		currentTime = Timeline.time
-	}
-
-	correctSceneAngle()
 	const animations: IRenderedAnimation[] = []
-	for (const animation of project.animations) {
-		animations.push(renderAnimation(animation, rig))
-		PROGRESS.set(PROGRESS.get() + 1)
-		await sleepForAnimationFrame()
+	let sceneAngleCorrected = false
+
+	// 途中で例外が出ても bone interpolation / scene angle / 選択中 animation を必ず入口の状態へ戻す
+	try {
+		Timeline.pause()
+		// Save selected animation
+		if (Mode.selected.id === 'animate') {
+			selectedAnimation = Animator.selected
+			currentTime = Timeline.time
+		}
+
+		correctSceneAngle()
+		sceneAngleCorrected = true
+		for (const animation of project.animations) {
+			animations.push(renderAnimation(animation, rig))
+			PROGRESS.set(PROGRESS.get() + 1)
+			await sleepForAnimationFrame()
+		}
+	} finally {
+		if (sceneAngleCorrected) restoreSceneAngle()
+
+		BONE_INTERPOLATION_ENABLED.set(true)
+
+		// Restore selected animation
+		if (Mode.selected.id === 'animate' && selectedAnimation) {
+			selectedAnimation.select()
+			Timeline.setTime(currentTime)
+			Animator.preview()
+		} else if (Mode.selected.id === 'edit') {
+			Animator.showDefaultPose()
+		}
+
+		console.timeEnd('Rendering animations took')
 	}
-	restoreSceneAngle()
 
-	BONE_INTERPOLATION_ENABLED.set(true)
-
-	// Restore selected animation
-	if (Mode.selected.id === 'animate' && selectedAnimation) {
-		selectedAnimation.select()
-		Timeline.setTime(currentTime)
-		Animator.preview()
-	} else if (Mode.selected.id === 'edit') {
-		Animator.showDefaultPose()
-	}
-
-	console.timeEnd('Rendering animations took')
 	console.log('Animations:', animations)
 	return animations
 }
