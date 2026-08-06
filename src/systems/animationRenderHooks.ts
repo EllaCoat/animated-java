@@ -21,6 +21,13 @@
  *   同じ `frameIndex` に対しては何度呼ばれても結果が変わらない (= 冪等) 実装が要る
  * - `timeSeconds` は `frameTimeSeconds` と一致しないことがある (= pre-post の side sample では
  *   `frameTimeSeconds + 0.001`)。時刻の正本は `frameIndex` であり、 `timeSeconds` は参考値として扱う
+ * - **animation 単位の周期情報を context に載せている** (= `animationLengthSeconds` /
+ *   `renderSampleCount` / `loopMode` / `loopDelayFrames`)。 このうち `renderSampleCount` /
+ *   `loopMode` / `loopDelayFrames` は **datapack meta の `dur` / `lp` / `dly` と一致する値**で、
+ *   hook 側が animation の内部構造を推測せずに周期を判断できるようにするために渡している。
+ *   `renderSampleCount` は render loop が実際に生成する frame 数そのもの (= `animation.length`
+ *   から数え直した値ではない) なので、 `IRenderedAnimation.frames.length` / `duration` と必ず一致する。
+ *   **「表示上の最終 frame がどれか」 の解釈は hook 側の責務**であり、 AJ は生の値を渡すだけ
  * - **hook が加える変化は matrix に現れていればよい** (= `pos` / `rot` / `scale` に出る必要はない)。
  *   `hashAnimations` は node transform の `matrix.elements` 16 要素をそのまま mix するため、
  *   shear や right rotation だけを動かす変換も reload-skip 判定に反映される。
@@ -40,6 +47,14 @@ export interface RenderAnimationContext {
 	excludedNodeUuids: ReadonlySet<string>
 	/** 指定時刻の keyframe pose を scene へ再評価する。 呼び出し側が閉包として詰める。 */
 	evaluateBasePose(timeSeconds: number): void
+	/** `animation.length` (= 秒)。 */
+	readonly animationLengthSeconds: number
+	/** render loop が実際に生成する frame の数。 datapack meta の `dur` と一致する。 */
+	readonly renderSampleCount: number
+	/** `animation.loop`。 datapack meta の `lp` の元になる値。 */
+	readonly loopMode: _Animation['loop']
+	/** `Number(animation.loop_delay) || 0` (= tick)。 datapack meta の `dly` と一致する。 */
+	readonly loopDelayFrames: number
 }
 
 /** frame 単位のコンテキスト (= `RenderAnimationContext` に時刻情報を足したもの)。 */
@@ -198,9 +213,15 @@ export function areRenderHooksSuppressed() {
 
 // --- 公開 API ---------------------------------------------------------------
 
-/** 外部 plugin 向けの公開 API。 `version` は互換性確認用。 */
+/**
+ * 外部 plugin 向けの公開 API。 `version` は互換性確認用。
+ *
+ * - `1` : 初版
+ * - `2` : `RenderAnimationContext` に周期情報 (= `animationLengthSeconds` / `renderSampleCount` /
+ *   `loopMode` / `loopDelayFrames`) を必須で追加
+ */
 export const RENDER_HOOKS_API = {
-	version: 1,
+	version: 2,
 	register: registerRenderHooks,
 	unregister: unregisterRenderHooks,
 }

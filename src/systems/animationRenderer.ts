@@ -405,10 +405,22 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 
 	const includedNodes = new Set<string>()
 
+	// frame ループが訪れる時刻の列。 **ループ本体もこの配列を回す** (= context の
+	// `renderSampleCount` と実際の frame 数を同じ配列から取るため)。 `animation.length` から
+	// 別式で数え直すと `roundToNth` の丸めと食い違って off-by-one が出る。
+	const sampleTimes: number[] = []
+	for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+		sampleTimes.push(time)
+	}
+
 	currentRenderContext = {
 		animation,
 		rig,
 		excludedNodeUuids: collectExcludedNodeUuids(animation),
+		animationLengthSeconds: animation.length,
+		renderSampleCount: sampleTimes.length,
+		loopMode: animation.loop,
+		loopDelayFrames: Number(animation.loop_delay) || 0,
 		evaluateBasePose(timeSeconds: number) {
 			const previousTime = Timeline.time
 			try {
@@ -432,13 +444,20 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 		animationBegun = true
 
 		let frameIndex = 0
-		for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+		for (const time of sampleTimes) {
 			updatePreview(animation, time, frameIndex)
 			updatePreview(animation, time, frameIndex) // IK doesn't work unless I call this twice for some reason...
 			const frame: IRenderedFrame = getFrame(animation, rig.nodes, time, frameIndex)
 			Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
 			rendered.frames.push(frame)
 			frameIndex++
+		}
+		// dev guard : hook へ渡した `renderSampleCount` と実際の frame 数がずれていたら契約違反。
+		// 出力自体は壊さないので throw はせず warn だけ出す。
+		if (rendered.frames.length !== sampleTimes.length) {
+			console.warn(
+				`Render sample count mismatch on animation '${animation.name}': context reported ${sampleTimes.length}, but ${rendered.frames.length} frames were rendered.`
+			)
 		}
 	} catch (error) {
 		bodyError.failed = true

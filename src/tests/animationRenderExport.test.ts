@@ -19,6 +19,8 @@
  * 6e. `onBeginAnimation` の部分失敗で、 成功済み hook の `onEndAnimation` が 1 回だけ走ること
  * 7.  `onPose` の中から `evaluateBasePose` を呼べて、 `Timeline.time` が戻ること
  * 8.  1 と 2 の render 結果で、 生成される mcfunction が byte 単位で違うこと
+ * 9.  context の周期情報が render 結果と一致すること (= `renderSampleCount` == `frames.length`)
+ * 9b. `onBeginAnimation` と `onPose` の周期情報が全 dispatch で同一であること
  *
  * `animationRenderer.ts` は import 連鎖の **module 評価時**に Blockbench global を要求する
  * (= `Dialog` / `BoneAnimator.prototype`)。 global を後から生やす方式では越えられないため、
@@ -150,6 +152,7 @@ import {
 	isRenderingSessionActive,
 	RenderHookError,
 	registerRenderHooks,
+	type RenderAnimationContext,
 	type RenderHookContext,
 	unregisterRenderHooks,
 } from '../systems/animationRenderHooks'
@@ -287,6 +290,37 @@ function extractBoneTransforms(animations: IRenderedAnimation[]) {
 			matrix: transform?.matrix.elements.slice(),
 		}
 	})
+}
+
+/**
+ * 周期情報の検証で使う animation 設定。 harness の既定値 (= `length: 0.5` / `loop: 'once'` /
+ * `loop_delay: 0`) のままだと 「context が本当に animation から読んでいるか」 を判別できないため、
+ * 3 つとも既定と違う値にしてある。
+ */
+const TIMING_LENGTH_SECONDS = 0.35
+const TIMING_LOOP_MODE = 'loop'
+/** Blockbench 側の `loop_delay` は string なので、 数値化されることも併せて見る。 */
+const TIMING_LOOP_DELAY_RAW = '3'
+const TIMING_LOOP_DELAY = 3
+
+/** context から周期情報だけを抜く (= `onBeginAnimation` と `onPose` の比較用)。 */
+function extractTiming(context: RenderAnimationContext) {
+	return {
+		animationLengthSeconds: context.animationLengthSeconds,
+		renderSampleCount: context.renderSampleCount,
+		loopMode: context.loopMode,
+		loopDelayFrames: context.loopDelayFrames,
+	}
+}
+
+/** harness の animation を、 周期情報が既定値と区別できる設定へ差し替える。 */
+function applyTimingFixture(harness: RenderHarness) {
+	const animation = harness.project.animations[0] as unknown as {
+		loop: string
+		loop_delay: string
+	}
+	animation.loop = TIMING_LOOP_MODE
+	animation.loop_delay = TIMING_LOOP_DELAY_RAW
 }
 
 describe('renderProjectAnimations - hook 経路の実走', () => {
@@ -660,6 +694,62 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		for (const entry of observed) {
 			expect(entry.after).toBe(entry.before)
 		}
+	})
+
+	it('9. onBeginAnimation の周期情報が render 結果と一致する', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		let timing: ReturnType<typeof extractTiming> | undefined
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				timing = extractTiming(context)
+			},
+		})
+		const animations = await render(harness)
+
+		expect(timing).toBeDefined()
+		// renderSampleCount は frame ループが実際に回った回数そのもの (= 別式で数え直していない)。
+		expect(timing!.renderSampleCount).toBe(animations[0].frames.length)
+		expect(timing!.renderSampleCount).toBe(harness.expectedFrameTimes.length)
+		// datapack meta の dur / lp / dly の元になる値と一致する。
+		expect(timing!.renderSampleCount).toBe(animations[0].duration)
+		expect(timing!.loopMode).toBe(animations[0].loop_mode)
+		expect(timing!.loopDelayFrames).toBe(animations[0].loop_delay)
+		// 既定値ではなく animation から読んでいる。
+		expect(timing!.animationLengthSeconds).toBe(TIMING_LENGTH_SECONDS)
+		expect(timing!.loopMode).toBe(TIMING_LOOP_MODE)
+		expect(timing!.loopDelayFrames).toBe(TIMING_LOOP_DELAY)
+	})
+
+	it('9b. onPose の周期情報は onBeginAnimation と全 dispatch で同一', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		let beginTiming: ReturnType<typeof extractTiming> | undefined
+		const poseTimings: Array<ReturnType<typeof extractTiming>> = []
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				beginTiming = extractTiming(context)
+			},
+			onPose(context: RenderHookContext) {
+				poseTimings.push(extractTiming(context))
+			},
+		})
+		const animations = await render(harness)
+
+		expect(beginTiming).toBeDefined()
+		expect(poseTimings.length).toBeGreaterThan(animations[0].frames.length)
+		for (const timing of poseTimings) {
+			expect(timing).toEqual(beginTiming)
+		}
+		expect(beginTiming!.renderSampleCount).toBe(animations[0].frames.length)
 	})
 })
 

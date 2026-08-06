@@ -7,9 +7,11 @@
  * 2. session の呼び出し順 (= begin / pose は登録順、 end は逆順) と参加者スナップショット
  * 3. hook 未登録 / session 外 / suppression 中の dispatch が完全 no-op であること
  * 4. hook が throw したときの `RenderHookError` 包装と、 end 系の全件実行
+ * 5. 公開 API の `version` (= context に必須フィールドを足したら上げる契約)
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+	RENDER_HOOKS_API,
 	RenderHookError,
 	areRenderHooksSuppressed,
 	beginRenderingSession,
@@ -37,6 +39,10 @@ function makeAnimationContext(): RenderAnimationContext {
 		rig: {} as RenderAnimationContext['rig'],
 		excludedNodeUuids: new Set<string>(),
 		evaluateBasePose: () => {},
+		animationLengthSeconds: 0.5,
+		renderSampleCount: 11,
+		loopMode: 'once',
+		loopDelayFrames: 0,
 	}
 }
 
@@ -106,6 +112,19 @@ describe('animationRenderHooks - registry', () => {
 	it('未登録 id の解除は throw しない (= 冪等)', () => {
 		expect(() => unregisterRenderHooks('missing')).not.toThrow()
 		expect(() => unregisterRenderHooks('missing')).not.toThrow()
+	})
+})
+
+// --- 公開 API ---------------------------------------------------------------
+
+describe('animationRenderHooks - 公開 API', () => {
+	it('version は 2 (= context の周期情報を必須で足した版)', () => {
+		expect(RENDER_HOOKS_API.version).toBe(2)
+	})
+
+	it('register / unregister は registry 関数そのもの', () => {
+		expect(RENDER_HOOKS_API.register).toBe(registerRenderHooks)
+		expect(RENDER_HOOKS_API.unregister).toBe(unregisterRenderHooks)
 	})
 })
 
