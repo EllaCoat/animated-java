@@ -389,13 +389,6 @@ function throwPreferringBody(body: IErrorSlot, cleanup: IErrorSlot) {
 	if (cleanup.failed) throw cleanup.error
 }
 
-/**
- * frame ループが生成する sample 数の上限。 1 sample = 1 tick なので 100,000 で約 83 分ぶんあり、
- * 現実的な animation 長は十分に超えている。 `animation.length` が壊れた値 (= `Infinity` 等) の
- * ときに時刻列が際限なく伸びるのを止めるためだけの安全弁。
- */
-const MAX_RENDER_SAMPLES = 100_000
-
 function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 	const rendered = {
 		name: animation.name,
@@ -412,18 +405,31 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 
 	const includedNodes = new Set<string>()
 
+	// `+Infinity` は `time <= animation.length` が永久に真になる (= 旧実装がハングしていた) ので、
+	// 時刻列を作る前に弾く。 `NaN` / `-Infinity` は旧実装でも比較が偽で 0 件だったため、
+	// **弾かずに 0 件のまま通す** (= 従来の出力を変えない)。
+	if (animation.length === Infinity) {
+		throw new Error(
+			`Animation '${animation.name}' has a non-finite length (${animation.length}). Cannot render.`
+		)
+	}
+
 	// frame ループが訪れる時刻の列。 **ループ本体もこの配列を回す** (= context の
 	// `renderSampleCount` と実際の frame 数を同じ配列から取るため)。 `animation.length` から
 	// 別式で数え直すと `roundToNth` の丸めと食い違って off-by-one が出る。
+	// **件数の上限は設けない**。 有限長では hook 導入前の for ループと 1 件も違わない。
 	const sampleTimes: number[] = []
-	for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
-		if (sampleTimes.length >= MAX_RENDER_SAMPLES) {
-			console.warn(
-				`Animation '${animation.name}' exceeds the render sample limit (${MAX_RENDER_SAMPLES}); truncating. Check the animation length (${animation.length}).`
-			)
-			break
-		}
+	for (let time = 0; time <= animation.length; ) {
 		sampleTimes.push(time)
+		const nextTime = roundToNth(time + 0.05, 20)
+		// double の精度限界 (= `time` が大きすぎて `+0.05` が丸めで消える) に達すると時刻が
+		// 進まなくなり、 旧実装は同じ frame を延々と積み続けていた。 黙って回り続けるより失敗させる。
+		if (!(nextTime > time)) {
+			throw new Error(
+				`Animation '${animation.name}' stopped advancing at ${time}s (length ${animation.length}). Cannot render.`
+			)
+		}
+		time = nextTime
 	}
 
 	currentRenderContext = {

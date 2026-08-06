@@ -23,6 +23,9 @@
  * 9b. `onBeginAnimation` と `onPose` の周期情報が全 dispatch で同一であること
  * 9c. 格子外 / 端数の length でも `renderSampleCount` == `frames.length` が成立すること
  * 9d. context の loop 情報が `rendered` と同一 source から来ていること (= `select()` で割れない)
+ * 10.  有限長の frame 数が hook 導入前の for ループと一致すること (= 件数上限を設けていない)
+ * 10b. `length` が `+Infinity` なら失敗し、 `NaN` / `-Infinity` は従来どおり 0 frame で通ること
+ * 10c. frame ループの時刻が進まなくなったら失敗すること (= 無限ループにしない)
  *
  * `animationRenderer.ts` は import 連鎖の **module 評価時**に Blockbench global を要求する
  * (= `Dialog` / `BoneAnimator.prototype`)。 global を後から生やす方式では越えられないため、
@@ -136,6 +139,25 @@ vi.mock('../formats/blueprint', () => ({
 		return !compareVersions(version, Project.animated_java.target_minecraft_version)
 	},
 }))
+
+/**
+ * `roundToNth` を差し替えるための制御箱。 `stallTime` に数値を入れると `roundToNth` が常に
+ * その値を返し、 **frame ループの時刻が進まない状況** (= double の精度限界) を再現できる。
+ *
+ * 本物の精度限界を踏むには `1e15` 秒級の `animation.length` が要る (= その手前で配列が破裂する)
+ * ため、 丸めだけを差し替えて再現している。 `undefined` の間は本物へ委譲するので他の test には効かない。
+ */
+const MISC_CONTROL = vi.hoisted(() => ({ stallTime: undefined as number | undefined }))
+vi.mock('../util/misc', async importOriginal => {
+	const actual = await importOriginal<typeof import('../util/misc')>()
+	return {
+		...actual,
+		roundToNth(num: number, nth: number) {
+			if (MISC_CONTROL.stallTime !== undefined) return MISC_CONTROL.stallTime
+			return actual.roundToNth(num, nth)
+		},
+	}
+})
 
 // tellraw.ts の `import { type IRenderedVariant } from '../rigRenderer'` は verbatimModuleSyntax の
 // 下で side-effect import として残り、 型しか使っていないのに実体 (= constants → util/lang の
@@ -315,6 +337,28 @@ const TIMING_LOOP_DELAY = 3
  */
 const TIMING_LENGTHS = [0.02, 0.11, 0.333, 0.35, 0.37, 0.7]
 
+/**
+ * 「旧実装と同じ frame 数か」 を見るための animation 長。 端 (= `0`) と、 tick 数が 3 桁に
+ * 乗る長さ (= `5`) を含める。
+ */
+const LEGACY_EQUIVALENCE_LENGTHS = [0, 0.02, 0.35, 0.7, 5]
+
+/**
+ * hook 導入前の frame ループが訪れる時刻の数。 当時の
+ * `for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20))` を
+ * そのまま写したもの (= `roundToNth(n, x)` は `Math.round(n * x) / x`)。
+ *
+ * **production の実装からは独立している**ことに意味がある (= harness の `expectedFrameTimes` も
+ * 同じ列を持つが、 そちらが production 追従で書き換わっても、 この関数は旧実装のまま残る)。
+ */
+function legacyFrameCount(length: number): number {
+	let count = 0
+	for (let time = 0; time <= length; time = Math.round((time + 0.05) * 20) / 20) {
+		count++
+	}
+	return count
+}
+
 /** context から周期情報だけを抜く (= `onBeginAnimation` と `onPose` の比較用)。 */
 function extractTiming(context: RenderAnimationContext) {
 	return {
@@ -346,6 +390,7 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 	afterEach(() => {
 		unregisterRenderHooks(HOOK_ID)
 		unregisterRenderHooks(SECOND_HOOK_ID)
+		MISC_CONTROL.stallTime = undefined
 		vi.restoreAllMocks()
 	})
 
@@ -834,6 +879,72 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		expect(timing!.loopDelayFrames).toBe(animations[0].loop_delay)
 		expect(timing!.loopMode).toBe(TIMING_LOOP_MODE)
 		expect(timing!.loopDelayFrames).toBe(TIMING_LOOP_DELAY)
+	})
+
+	it('10. 有限長の frame 数は hook 導入前の for ループと一致する (= 件数上限を設けない)', async () => {
+		for (const length of LEGACY_EQUIVALENCE_LENGTHS) {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID, animationLength: length })
+			let timing: ReturnType<typeof extractTiming> | undefined
+			registerRenderHooks(HOOK_ID, {
+				onBeginAnimation(context: RenderAnimationContext) {
+					timing = extractTiming(context)
+				},
+			})
+			const animations = await render(harness)
+			unregisterRenderHooks(HOOK_ID)
+
+			const expected = legacyFrameCount(length)
+			expect(animations[0].frames.length, `length=${length}`).toBe(expected)
+			expect(animations[0].duration, `length=${length}`).toBe(expected)
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(expected)
+		}
+	})
+
+	it('10b. length が +Infinity なら失敗し、 NaN / -Infinity は 0 frame で通る', async () => {
+		/**
+		 * harness を組んでから `length` だけ差し替える。 `createRenderHarness` の期待値生成
+		 * (= `expectedFrameTimes`) が `Infinity` では終わらないため、 option 経由では渡せない。
+		 */
+		const withLength = (length: number) => {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID })
+			;(harness.project.animations[0] as unknown as { length: number }).length = length
+			return harness
+		}
+
+		// +Infinity は `time <= length` が永久に真 (= 旧実装はハングしていた) なので失敗させる。
+		const infinite = withLength(Infinity)
+		const caught = await render(infinite).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+		expect(caught).toBeInstanceOf(Error)
+		expect((caught as Error).message).toContain('non-finite length')
+		// 既存の bodyError / cleanup 経路に乗っているので global 状態は復旧している。
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(infinite.scene.quaternion.w).toBeCloseTo(1, 9)
+
+		// NaN / -Infinity は旧実装でも比較が偽で 0 件だったので、 その挙動を保つ (= throw しない)。
+		for (const length of [NaN, -Infinity]) {
+			const animations = await render(withLength(length))
+			expect(animations[0].frames.length, `length=${length}`).toBe(0)
+			expect(animations[0].duration, `length=${length}`).toBe(0)
+		}
+	})
+
+	it('10c. frame ループの時刻が進まなくなったら失敗する (= 無限ループにしない)', async () => {
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		// `roundToNth` が常に 0 を返す = 1 周目の時点で時刻が進まない状況。
+		MISC_CONTROL.stallTime = 0
+
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+
+		expect(caught).toBeInstanceOf(Error)
+		expect((caught as Error).message).toContain('stopped advancing')
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(harness.scene.quaternion.w).toBeCloseTo(1, 9)
 	})
 })
 
