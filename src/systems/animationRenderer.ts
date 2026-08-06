@@ -389,6 +389,13 @@ function throwPreferringBody(body: IErrorSlot, cleanup: IErrorSlot) {
 	if (cleanup.failed) throw cleanup.error
 }
 
+/**
+ * frame ループが生成する sample 数の上限。 1 sample = 1 tick なので 100,000 で約 83 分ぶんあり、
+ * 現実的な animation 長は十分に超えている。 `animation.length` が壊れた値 (= `Infinity` 等) の
+ * ときに時刻列が際限なく伸びるのを止めるためだけの安全弁。
+ */
+const MAX_RENDER_SAMPLES = 100_000
+
 function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 	const rendered = {
 		name: animation.name,
@@ -410,6 +417,12 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 	// 別式で数え直すと `roundToNth` の丸めと食い違って off-by-one が出る。
 	const sampleTimes: number[] = []
 	for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+		if (sampleTimes.length >= MAX_RENDER_SAMPLES) {
+			console.warn(
+				`Animation '${animation.name}' exceeds the render sample limit (${MAX_RENDER_SAMPLES}); truncating. Check the animation length (${animation.length}).`
+			)
+			break
+		}
 		sampleTimes.push(time)
 	}
 
@@ -419,8 +432,11 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 		excludedNodeUuids: collectExcludedNodeUuids(animation),
 		animationLengthSeconds: animation.length,
 		renderSampleCount: sampleTimes.length,
-		loopMode: animation.loop,
-		loopDelayFrames: Number(animation.loop_delay) || 0,
+		// loop 情報は `animation` から読み直さず `rendered` を経由する。 `animation.select()` は
+		// `select_animation` を同期 dispatch するため、 listener が loop 設定を書き換えると
+		// 「context = select 後の新値 / datapack meta = select 前の旧値」 に割れてしまう
+		loopMode: rendered.loop_mode,
+		loopDelayFrames: rendered.loop_delay,
 		evaluateBasePose(timeSeconds: number) {
 			const previousTime = Timeline.time
 			try {
@@ -454,6 +470,8 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 		}
 		// dev guard : hook へ渡した `renderSampleCount` と実際の frame 数がずれていたら契約違反。
 		// 出力自体は壊さないので throw はせず warn だけ出す。
+		// **現在の制御フローでは発火しない** (= ループは `sampleTimes` を最後まで回し、 各周で
+		// 必ず 1 frame push する)。 将来ループ本体に `continue` 等が入ったときの保険として置いている。
 		if (rendered.frames.length !== sampleTimes.length) {
 			console.warn(
 				`Render sample count mismatch on animation '${animation.name}': context reported ${sampleTimes.length}, but ${rendered.frames.length} frames were rendered.`

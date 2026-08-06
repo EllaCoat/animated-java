@@ -21,6 +21,8 @@
  * 8.  1 と 2 の render 結果で、 生成される mcfunction が byte 単位で違うこと
  * 9.  context の周期情報が render 結果と一致すること (= `renderSampleCount` == `frames.length`)
  * 9b. `onBeginAnimation` と `onPose` の周期情報が全 dispatch で同一であること
+ * 9c. 格子外 / 端数の length でも `renderSampleCount` == `frames.length` が成立すること
+ * 9d. context の loop 情報が `rendered` と同一 source から来ていること (= `select()` で割れない)
  *
  * `animationRenderer.ts` は import 連鎖の **module 評価時**に Blockbench global を要求する
  * (= `Dialog` / `BoneAnimator.prototype`)。 global を後から生やす方式では越えられないため、
@@ -302,6 +304,16 @@ const TIMING_LOOP_MODE = 'loop'
 /** Blockbench 側の `loop_delay` は string なので、 数値化されることも併せて見る。 */
 const TIMING_LOOP_DELAY_RAW = '3'
 const TIMING_LOOP_DELAY = 3
+
+/**
+ * `renderSampleCount` の検証で回す animation 長の一覧。
+ *
+ * **`0.05` の格子から外れた値**と、 **格子ちょうどでも `length / 0.05` が浮動小数で
+ * 割り切れない値** (= `0.35` / `0.7`) を混ぜてある。 後者があることで、 `renderSampleCount` を
+ * 禁止された別式 (= `Math.floor(length / 0.05) + 1`) で数え直す実装に差し替えたときに
+ * この test が落ちる (= 実測から取っていることを実際に見分けられる)。
+ */
+const TIMING_LENGTHS = [0.02, 0.11, 0.333, 0.35, 0.37, 0.7]
 
 /** context から周期情報だけを抜く (= `onBeginAnimation` と `onPose` の比較用)。 */
 function extractTiming(context: RenderAnimationContext) {
@@ -750,6 +762,78 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 			expect(timing).toEqual(beginTiming)
 		}
 		expect(beginTiming!.renderSampleCount).toBe(animations[0].frames.length)
+	})
+
+	it('9c. 格子外 / 端数の length でも renderSampleCount が frames.length と一致する', async () => {
+		const observed: Array<{ length: number; count: number }> = []
+
+		for (const length of TIMING_LENGTHS) {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID, animationLength: length })
+			let timing: ReturnType<typeof extractTiming> | undefined
+			registerRenderHooks(HOOK_ID, {
+				onBeginAnimation(context: RenderAnimationContext) {
+					timing = extractTiming(context)
+				},
+			})
+			const animations = await render(harness)
+			unregisterRenderHooks(HOOK_ID)
+
+			const frameCount = animations[0].frames.length
+			expect(timing, `length=${length}`).toBeDefined()
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(frameCount)
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(
+				harness.expectedFrameTimes.length
+			)
+			expect(timing!.animationLengthSeconds, `length=${length}`).toBe(length)
+			observed.push({ length, count: frameCount })
+		}
+
+		// 禁止した別式 (= `Math.floor(length / 0.05) + 1`) では少なくとも 1 件で値がずれる。
+		// これが 0 件だと、 別式へ差し替えても上の assert が全部通ってしまう (= test が
+		// 「実測から取っていること」 を見分けられない) ので、 case 選びごと守る。
+		const divergent = observed.filter(
+			entry => Math.floor(entry.length / 0.05) + 1 !== entry.count
+		)
+		expect(divergent.length).toBeGreaterThan(0)
+	})
+
+	it('9d. context の loop 情報は rendered と同一 source (= select() 中の書き換えで割れない)', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		// Blockbench の `Animation.select()` は `select_animation` を同期 dispatch するため、
+		// listener が loop 設定を書き換えうる。 `rendered` 側は select() の**前**に値を確定させて
+		// いるので、 context が `animation` から読み直していると
+		// 「context = 新値 / datapack meta = 旧値」 に割れる。 それを再現する。
+		const animation = harness.project.animations[0] as unknown as {
+			loop: string
+			loop_delay: string
+			select: () => void
+		}
+		animation.select = () => {
+			animation.loop = 'hold'
+			animation.loop_delay = '99'
+		}
+
+		let timing: ReturnType<typeof extractTiming> | undefined
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				timing = extractTiming(context)
+			},
+		})
+		const animations = await render(harness)
+
+		// select() が実際に値を書き換えている (= 前提が成立している)。
+		expect(animation.loop).toBe('hold')
+		expect(animation.loop_delay).toBe('99')
+		// context は datapack meta 側 (= rendered) と同じ値のまま。
+		expect(timing!.loopMode).toBe(animations[0].loop_mode)
+		expect(timing!.loopDelayFrames).toBe(animations[0].loop_delay)
+		expect(timing!.loopMode).toBe(TIMING_LOOP_MODE)
+		expect(timing!.loopDelayFrames).toBe(TIMING_LOOP_DELAY)
 	})
 })
 

@@ -23,8 +23,11 @@
  *   `frameTimeSeconds + 0.001`)。時刻の正本は `frameIndex` であり、 `timeSeconds` は参考値として扱う
  * - **animation 単位の周期情報を context に載せている** (= `animationLengthSeconds` /
  *   `renderSampleCount` / `loopMode` / `loopDelayFrames`)。 このうち `renderSampleCount` /
- *   `loopMode` / `loopDelayFrames` は **datapack meta の `dur` / `lp` / `dly` と一致する値**で、
- *   hook 側が animation の内部構造を推測せずに周期を判断できるようにするために渡している。
+ *   `loopMode` / `loopDelayFrames` は **datapack meta の `dur` / `lp` / `dly` に対応する**
+ *   (= 同じ animation 設定を指す) 値で、 hook 側が animation の内部構造を推測せずに周期を
+ *   判断できるようにするために渡している。 `renderSampleCount` と `loopDelayFrames` は `dur` / `dly`
+ *   と **同じ値**だが、 `loopMode` だけは **エンコードが違う** (= context は文字列
+ *   `'once' | 'hold' | 'loop'`、 meta の `lp` は score 用に 0 / 1 / 2 へ畳んだ byte)。
  *   `renderSampleCount` は render loop が実際に生成する frame 数そのもの (= `animation.length`
  *   から数え直した値ではない) なので、 `IRenderedAnimation.frames.length` / `duration` と必ず一致する。
  *   **「表示上の最終 frame がどれか」 の解釈は hook 側の責務**であり、 AJ は生の値を渡すだけ
@@ -51,7 +54,10 @@ export interface RenderAnimationContext {
 	readonly animationLengthSeconds: number
 	/** render loop が実際に生成する frame の数。 datapack meta の `dur` と一致する。 */
 	readonly renderSampleCount: number
-	/** `animation.loop`。 datapack meta の `lp` の元になる値。 */
+	/**
+	 * `animation.loop` (= 文字列)。 datapack meta の `lp` に対応するが、 `lp` は score 用に
+	 * 0 / 1 / 2 へ畳んだ byte なので**エンコードは違う**。
+	 */
 	readonly loopMode: _Animation['loop']
 	/** `Number(animation.loop_delay) || 0` (= tick)。 datapack meta の `dly` と一致する。 */
 	readonly loopDelayFrames: number
