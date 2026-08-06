@@ -19,6 +19,14 @@
  * 6e. `onBeginAnimation` の部分失敗で、 成功済み hook の `onEndAnimation` が 1 回だけ走ること
  * 7.  `onPose` の中から `evaluateBasePose` を呼べて、 `Timeline.time` が戻ること
  * 8.  1 と 2 の render 結果で、 生成される mcfunction が byte 単位で違うこと
+ * 9.  context の周期情報が render 結果と一致すること (= `renderSampleCount` == `frames.length`)
+ * 9b. `onBeginAnimation` と `onPose` の周期情報が全 dispatch で同一であること
+ * 9c. 格子外 / 端数の length でも `renderSampleCount` == `frames.length` が成立すること
+ * 9d. context の loop 情報が `rendered` と同一 source から来ていること (= `select()` で割れない)
+ * 10.  有限長の **時刻列**が hook 導入前の for ループと一致すること (= 件数上限を設けていない)
+ * 10b. `length` が `+Infinity` なら失敗し、 `NaN` / `-Infinity` は従来どおり 0 frame で通ること
+ * 10c. frame ループの時刻が進まなくなったら失敗すること (= 無限ループにしない)
+ * 10d. 10b / 10c の throw が active な hook session の後始末を通ること
  *
  * `animationRenderer.ts` は import 連鎖の **module 評価時**に Blockbench global を要求する
  * (= `Dialog` / `BoneAnimator.prototype`)。 global を後から生やす方式では越えられないため、
@@ -133,6 +141,25 @@ vi.mock('../formats/blueprint', () => ({
 	},
 }))
 
+/**
+ * `roundToNth` を差し替えるための制御箱。 `stallTime` に数値を入れると `roundToNth` が常に
+ * その値を返し、 **frame ループの時刻が進まない状況** (= double の精度限界) を再現できる。
+ *
+ * 本物の精度限界を踏むには `1e15` 秒級の `animation.length` が要る (= その手前で配列が破裂する)
+ * ため、 丸めだけを差し替えて再現している。 `undefined` の間は本物へ委譲するので他の test には効かない。
+ */
+const MISC_CONTROL = vi.hoisted(() => ({ stallTime: undefined as number | undefined }))
+vi.mock('../util/misc', async importOriginal => {
+	const actual = await importOriginal<typeof import('../util/misc')>()
+	return {
+		...actual,
+		roundToNth(num: number, nth: number) {
+			if (MISC_CONTROL.stallTime !== undefined) return MISC_CONTROL.stallTime
+			return actual.roundToNth(num, nth)
+		},
+	}
+})
+
 // tellraw.ts の `import { type IRenderedVariant } from '../rigRenderer'` は verbatimModuleSyntax の
 // 下で side-effect import として残り、 型しか使っていないのに実体 (= constants → util/lang の
 // LANGUAGES 仮想モジュール) がロードされる。 実行時に参照される値は無いので空モジュールで足りる。
@@ -150,6 +177,7 @@ import {
 	isRenderingSessionActive,
 	RenderHookError,
 	registerRenderHooks,
+	type RenderAnimationContext,
 	type RenderHookContext,
 	unregisterRenderHooks,
 } from '../systems/animationRenderHooks'
@@ -289,6 +317,71 @@ function extractBoneTransforms(animations: IRenderedAnimation[]) {
 	})
 }
 
+/**
+ * 周期情報の検証で使う animation 設定。 harness の既定値 (= `length: 0.5` / `loop: 'once'` /
+ * `loop_delay: 0`) のままだと 「context が本当に animation から読んでいるか」 を判別できないため、
+ * 3 つとも既定と違う値にしてある。
+ */
+const TIMING_LENGTH_SECONDS = 0.35
+const TIMING_LOOP_MODE = 'loop'
+/** Blockbench 側の `loop_delay` は string なので、 数値化されることも併せて見る。 */
+const TIMING_LOOP_DELAY_RAW = '3'
+const TIMING_LOOP_DELAY = 3
+
+/**
+ * `renderSampleCount` の検証で回す animation 長の一覧。
+ *
+ * **`0.05` の格子から外れた値**と、 **格子ちょうどでも `length / 0.05` が浮動小数で
+ * 割り切れない値** (= `0.35` / `0.7`) を混ぜてある。 後者があることで、 `renderSampleCount` を
+ * 禁止された別式 (= `Math.floor(length / 0.05) + 1`) で数え直す実装に差し替えたときに
+ * この test が落ちる (= 実測から取っていることを実際に見分けられる)。
+ */
+const TIMING_LENGTHS = [0.02, 0.11, 0.333, 0.35, 0.37, 0.7]
+
+/**
+ * 「旧実装と同じ時刻列か」 を見るための animation 長。 端 (= `0`) と、 tick 数が 3 桁に
+ * 乗る長さ (= `5`) を含める。
+ */
+const LEGACY_EQUIVALENCE_LENGTHS = [0, 0.02, 0.35, 0.7, 5]
+
+/**
+ * hook 導入前の frame ループが訪れる時刻の列。 当時の
+ * `for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20))` を
+ * 順序も更新式もそのまま写したもの (= `roundToNth(n, x)` は `Math.round(n * x) / x`)。
+ *
+ * **production の実装からは独立している**ことに意味がある (= harness の `expectedFrameTimes` も
+ * 同じ列を持つが、 そちらが production 追従で書き換わっても、 この関数は旧実装のまま残る)。
+ * 守りたい契約は 「件数が同じ」 ではなく 「訪れる時刻が 1 つも変わらない」 なので、
+ * 件数ではなく列そのものを返す。
+ */
+function legacyFrameTimes(length: number): number[] {
+	const times: number[] = []
+	for (let time = 0; time <= length; time = Math.round((time + 0.05) * 20) / 20) {
+		times.push(time)
+	}
+	return times
+}
+
+/** context から周期情報だけを抜く (= `onBeginAnimation` と `onPose` の比較用)。 */
+function extractTiming(context: RenderAnimationContext) {
+	return {
+		animationLengthSeconds: context.animationLengthSeconds,
+		renderSampleCount: context.renderSampleCount,
+		loopMode: context.loopMode,
+		loopDelayFrames: context.loopDelayFrames,
+	}
+}
+
+/** harness の animation を、 周期情報が既定値と区別できる設定へ差し替える。 */
+function applyTimingFixture(harness: RenderHarness) {
+	const animation = harness.project.animations[0] as unknown as {
+		loop: string
+		loop_delay: string
+	}
+	animation.loop = TIMING_LOOP_MODE
+	animation.loop_delay = TIMING_LOOP_DELAY_RAW
+}
+
 describe('renderProjectAnimations - hook 経路の実走', () => {
 	beforeEach(() => {
 		// production が毎 render で戻り値全体を console.log するため、 出力を抑える。
@@ -300,6 +393,7 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 	afterEach(() => {
 		unregisterRenderHooks(HOOK_ID)
 		unregisterRenderHooks(SECOND_HOOK_ID)
+		MISC_CONTROL.stallTime = undefined
 		vi.restoreAllMocks()
 	})
 
@@ -660,6 +754,255 @@ describe('renderProjectAnimations - hook 経路の実走', () => {
 		for (const entry of observed) {
 			expect(entry.after).toBe(entry.before)
 		}
+	})
+
+	it('9. onBeginAnimation の周期情報が render 結果と一致する', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		let timing: ReturnType<typeof extractTiming> | undefined
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				timing = extractTiming(context)
+			},
+		})
+		const animations = await render(harness)
+
+		expect(timing).toBeDefined()
+		// renderSampleCount は frame ループが実際に回った回数そのもの (= 別式で数え直していない)。
+		expect(timing!.renderSampleCount).toBe(animations[0].frames.length)
+		expect(timing!.renderSampleCount).toBe(harness.expectedFrameTimes.length)
+		// datapack meta の dur / lp / dly の元になる値と一致する。
+		expect(timing!.renderSampleCount).toBe(animations[0].duration)
+		expect(timing!.loopMode).toBe(animations[0].loop_mode)
+		expect(timing!.loopDelayFrames).toBe(animations[0].loop_delay)
+		// 既定値ではなく animation から読んでいる。
+		expect(timing!.animationLengthSeconds).toBe(TIMING_LENGTH_SECONDS)
+		expect(timing!.loopMode).toBe(TIMING_LOOP_MODE)
+		expect(timing!.loopDelayFrames).toBe(TIMING_LOOP_DELAY)
+	})
+
+	it('9b. onPose の周期情報は onBeginAnimation と全 dispatch で同一', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		let beginTiming: ReturnType<typeof extractTiming> | undefined
+		const poseTimings: Array<ReturnType<typeof extractTiming>> = []
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				beginTiming = extractTiming(context)
+			},
+			onPose(context: RenderHookContext) {
+				poseTimings.push(extractTiming(context))
+			},
+		})
+		const animations = await render(harness)
+
+		expect(beginTiming).toBeDefined()
+		expect(poseTimings.length).toBeGreaterThan(animations[0].frames.length)
+		for (const timing of poseTimings) {
+			expect(timing).toEqual(beginTiming)
+		}
+		expect(beginTiming!.renderSampleCount).toBe(animations[0].frames.length)
+	})
+
+	it('9c. 格子外 / 端数の length でも renderSampleCount が frames.length と一致する', async () => {
+		const observed: Array<{ length: number; count: number }> = []
+
+		for (const length of TIMING_LENGTHS) {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID, animationLength: length })
+			let timing: ReturnType<typeof extractTiming> | undefined
+			registerRenderHooks(HOOK_ID, {
+				onBeginAnimation(context: RenderAnimationContext) {
+					timing = extractTiming(context)
+				},
+			})
+			const animations = await render(harness)
+			unregisterRenderHooks(HOOK_ID)
+
+			const frameCount = animations[0].frames.length
+			expect(timing, `length=${length}`).toBeDefined()
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(frameCount)
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(
+				harness.expectedFrameTimes.length
+			)
+			expect(timing!.animationLengthSeconds, `length=${length}`).toBe(length)
+			observed.push({ length, count: frameCount })
+		}
+
+		// 禁止した別式 (= `Math.floor(length / 0.05) + 1`) では少なくとも 1 件で値がずれる。
+		// これが 0 件だと、 別式へ差し替えても上の assert が全部通ってしまう (= test が
+		// 「実測から取っていること」 を見分けられない) ので、 case 選びごと守る。
+		const divergent = observed.filter(
+			entry => Math.floor(entry.length / 0.05) + 1 !== entry.count
+		)
+		expect(divergent.length).toBeGreaterThan(0)
+	})
+
+	it('9d. context の loop 情報は rendered と同一 source (= select() 中の書き換えで割れない)', async () => {
+		const harness = createRenderHarness({
+			boneUuid: BONE_UUID,
+			animationLength: TIMING_LENGTH_SECONDS,
+		})
+		applyTimingFixture(harness)
+
+		// Blockbench の `Animation.select()` は `select_animation` を同期 dispatch するため、
+		// listener が loop 設定を書き換えうる。 `rendered` 側は select() の**前**に値を確定させて
+		// いるので、 context が `animation` から読み直していると
+		// 「context = 新値 / datapack meta = 旧値」 に割れる。 それを再現する。
+		const animation = harness.project.animations[0] as unknown as {
+			loop: string
+			loop_delay: string
+			select: () => void
+		}
+		animation.select = () => {
+			animation.loop = 'hold'
+			animation.loop_delay = '99'
+		}
+
+		let timing: ReturnType<typeof extractTiming> | undefined
+		registerRenderHooks(HOOK_ID, {
+			onBeginAnimation(context: RenderAnimationContext) {
+				timing = extractTiming(context)
+			},
+		})
+		const animations = await render(harness)
+
+		// select() が実際に値を書き換えている (= 前提が成立している)。
+		expect(animation.loop).toBe('hold')
+		expect(animation.loop_delay).toBe('99')
+		// context は datapack meta 側 (= rendered) と同じ値のまま。
+		expect(timing!.loopMode).toBe(animations[0].loop_mode)
+		expect(timing!.loopDelayFrames).toBe(animations[0].loop_delay)
+		expect(timing!.loopMode).toBe(TIMING_LOOP_MODE)
+		expect(timing!.loopDelayFrames).toBe(TIMING_LOOP_DELAY)
+	})
+
+	it('10. 有限長の時刻列は hook 導入前の for ループと一致する (= 件数上限を設けない)', async () => {
+		for (const length of LEGACY_EQUIVALENCE_LENGTHS) {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID, animationLength: length })
+			let timing: ReturnType<typeof extractTiming> | undefined
+			registerRenderHooks(HOOK_ID, {
+				onBeginAnimation(context: RenderAnimationContext) {
+					timing = extractTiming(context)
+				},
+			})
+			const animations = await render(harness)
+			unregisterRenderHooks(HOOK_ID)
+
+			const expected = legacyFrameTimes(length)
+			// 件数ではなく **訪れた時刻そのもの**を比較する (= 「件数は同じだが時刻がずれた」
+			// 回帰を落とすため)。 `frame.time` は frame ループの `time` がそのまま入る。
+			expect(
+				animations[0].frames.map(frame => frame.time),
+				`length=${length}`
+			).toEqual(expected)
+			expect(animations[0].duration, `length=${length}`).toBe(expected.length)
+			expect(timing!.renderSampleCount, `length=${length}`).toBe(expected.length)
+		}
+	})
+
+	it('10b. length が +Infinity なら失敗し、 NaN / -Infinity は 0 frame で通る', async () => {
+		/**
+		 * harness を組んでから `length` だけ差し替える。 `createRenderHarness` の期待値生成
+		 * (= `expectedFrameTimes`) が `Infinity` では終わらないため、 option 経由では渡せない。
+		 */
+		const withLength = (length: number) => {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID })
+			;(harness.project.animations[0] as unknown as { length: number }).length = length
+			return harness
+		}
+
+		// +Infinity は `time <= length` が永久に真 (= 旧実装はハングしていた) なので失敗させる。
+		const infinite = withLength(Infinity)
+		const caught = await render(infinite).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+		expect(caught).toBeInstanceOf(Error)
+		expect((caught as Error).message).toContain('non-finite length')
+		// 既存の bodyError / cleanup 経路に乗っているので global 状態は復旧している。
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(infinite.scene.quaternion.w).toBeCloseTo(1, 9)
+
+		// NaN / -Infinity は旧実装でも比較が偽で 0 件だったので、 その挙動を保つ (= throw しない)。
+		for (const length of [NaN, -Infinity]) {
+			const animations = await render(withLength(length))
+			expect(animations[0].frames.length, `length=${length}`).toBe(0)
+			expect(animations[0].duration, `length=${length}`).toBe(0)
+		}
+	})
+
+	it('10c. frame ループの時刻が進まなくなったら失敗する (= 無限ループにしない)', async () => {
+		const harness = createRenderHarness({ boneUuid: BONE_UUID })
+		// `roundToNth` が常に 0 を返す = 1 周目の時点で時刻が進まない状況。
+		MISC_CONTROL.stallTime = 0
+
+		const caught = await render(harness).then(
+			() => undefined,
+			(error: unknown) => error
+		)
+
+		expect(caught).toBeInstanceOf(Error)
+		expect((caught as Error).message).toContain('stopped advancing')
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(harness.scene.quaternion.w).toBeCloseTo(1, 9)
+	})
+
+	it('10d. 10b / 10c の throw は active な hook session の後始末を通る', async () => {
+		/**
+		 * noop hook を登録した状態で render を走らせ、 呼ばれた callback を記録する。
+		 * 10b / 10c は hook 未登録 (= session を張らない) で走るため、 session 側の
+		 * 後始末が通ることはそちらでは見えない。
+		 */
+		const runWithSession = async (prepare: () => RenderHarness) => {
+			const log: string[] = []
+			registerRenderHooks(HOOK_ID, {
+				onBeginRendering: () => log.push('beginRendering'),
+				onBeginAnimation: () => log.push('beginAnimation'),
+				onPose: () => log.push('pose'),
+				onEndAnimation: () => log.push('endAnimation'),
+				onEndRendering: () => log.push('endRendering'),
+			})
+			const harness = prepare()
+			const caught = await render(harness).then(
+				() => undefined,
+				(error: unknown) => error
+			)
+			unregisterRenderHooks(HOOK_ID)
+			return { log, caught, harness }
+		}
+
+		// (a) 非有限 length。 throw は animation 単位の context を組む前に出る。
+		const infinite = await runWithSession(() => {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID })
+			;(harness.project.animations[0] as unknown as { length: number }).length = Infinity
+			return harness
+		})
+		expect((infinite.caught as Error).message).toContain('non-finite length')
+		// session は開いたが animation 段へは進んでおらず、 onEndRendering はちょうど 1 回。
+		expect(infinite.log).toEqual(['beginRendering', 'endRendering'])
+		expect(isRenderingSessionActive()).toBe(false)
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(infinite.harness.scene.quaternion.w).toBeCloseTo(1, 9)
+
+		// (b) 時刻が進まないケースも同じ位置で throw する。
+		const stalled = await runWithSession(() => {
+			const harness = createRenderHarness({ boneUuid: BONE_UUID })
+			MISC_CONTROL.stallTime = 0
+			return harness
+		})
+		expect((stalled.caught as Error).message).toContain('stopped advancing')
+		expect(stalled.log).toEqual(['beginRendering', 'endRendering'])
+		expect(isRenderingSessionActive()).toBe(false)
+		expect(BONE_INTERPOLATION_ENABLED.get()).toBe(true)
+		expect(stalled.harness.scene.quaternion.w).toBeCloseTo(1, 9)
 	})
 })
 

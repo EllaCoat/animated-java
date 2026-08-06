@@ -405,10 +405,44 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 
 	const includedNodes = new Set<string>()
 
+	// `+Infinity` は `time <= animation.length` が永久に真になる (= 旧実装がハングしていた) ので、
+	// 時刻列を作る前に弾く。 `NaN` / `-Infinity` は旧実装でも比較が偽で 0 件だったため、
+	// **弾かずに 0 件のまま通す** (= 従来の出力を変えない)。
+	if (animation.length === Infinity) {
+		throw new Error(
+			`Animation '${animation.name}' has a non-finite length (${animation.length}). Cannot render.`
+		)
+	}
+
+	// frame ループが訪れる時刻の列。 **ループ本体もこの配列を回す** (= context の
+	// `renderSampleCount` と実際の frame 数を同じ配列から取るため)。 `animation.length` から
+	// 別式で数え直すと `roundToNth` の丸めと食い違って off-by-one が出る。
+	// **件数の上限は設けない**。 有限長では hook 導入前の for ループと 1 件も違わない。
+	const sampleTimes: number[] = []
+	for (let time = 0; time <= animation.length; ) {
+		sampleTimes.push(time)
+		const nextTime = roundToNth(time + 0.05, 20)
+		// double の精度限界 (= `time` が大きすぎて `+0.05` が丸めで消える) に達すると時刻が
+		// 進まなくなり、 旧実装は同じ frame を延々と積み続けていた。 黙って回り続けるより失敗させる。
+		if (!(nextTime > time)) {
+			throw new Error(
+				`Animation '${animation.name}' stopped advancing at ${time}s (length ${animation.length}). Cannot render.`
+			)
+		}
+		time = nextTime
+	}
+
 	currentRenderContext = {
 		animation,
 		rig,
 		excludedNodeUuids: collectExcludedNodeUuids(animation),
+		animationLengthSeconds: animation.length,
+		renderSampleCount: sampleTimes.length,
+		// loop 情報は `animation` から読み直さず `rendered` を経由する。 `animation.select()` は
+		// `select_animation` を同期 dispatch するため、 listener が loop 設定を書き換えると
+		// 「context = select 後の新値 / datapack meta = select 前の旧値」 に割れてしまう
+		loopMode: rendered.loop_mode,
+		loopDelayFrames: rendered.loop_delay,
 		evaluateBasePose(timeSeconds: number) {
 			const previousTime = Timeline.time
 			try {
@@ -432,13 +466,22 @@ function renderAnimation(animation: _Animation, rig: IRenderedRig) {
 		animationBegun = true
 
 		let frameIndex = 0
-		for (let time = 0; time <= animation.length; time = roundToNth(time + 0.05, 20)) {
+		for (const time of sampleTimes) {
 			updatePreview(animation, time, frameIndex)
 			updatePreview(animation, time, frameIndex) // IK doesn't work unless I call this twice for some reason...
 			const frame: IRenderedFrame = getFrame(animation, rig.nodes, time, frameIndex)
 			Object.keys(frame.node_transforms).forEach(n => includedNodes.add(n))
 			rendered.frames.push(frame)
 			frameIndex++
+		}
+		// dev guard : hook へ渡した `renderSampleCount` と実際の frame 数がずれていたら契約違反。
+		// 出力自体は壊さないので throw はせず warn だけ出す。
+		// **現在の制御フローでは発火しない** (= ループは `sampleTimes` を最後まで回し、 各周で
+		// 必ず 1 frame push する)。 将来ループ本体に `continue` 等が入ったときの保険として置いている。
+		if (rendered.frames.length !== sampleTimes.length) {
+			console.warn(
+				`Render sample count mismatch on animation '${animation.name}': context reported ${sampleTimes.length}, but ${rendered.frames.length} frames were rendered.`
+			)
 		}
 	} catch (error) {
 		bodyError.failed = true
