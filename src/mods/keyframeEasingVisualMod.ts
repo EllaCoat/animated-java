@@ -1,6 +1,6 @@
 // keyframe 背景に AJ easing curve を薄く重ね、 keyframe 本体を In/Out/InOut で着色。
 //
-// build graph 順序依存 ([[aj-next-session-handover]] mcbCompressionPlugin 持ち越し対策) を踏まないよう、
+// mcbCompressionPlugin が build graph の順序に依存して落ちる問題を踏まないよう、
 // SVG glob import / CSS file import 等の追加 edge を全廃。 SVG path data + CSS は文字列リテラルで持つ。
 // top-level evaluation は const/型定義のみで、 関数呼出は全部 apply() 内に閉じる。
 

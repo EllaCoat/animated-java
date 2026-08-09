@@ -108,3 +108,6 @@ dist
 out/linecounter.txt
 out/linecounter.json
 testPluginExport.json
+
+# TSB 固有のドキュメント (= 内部パスと個人情報を含むためローカル限定)
+docs/
