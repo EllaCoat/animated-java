@@ -38,12 +38,17 @@ export const BLUEPRINT_CODEC = registerDeletableHandlerPatch({
 				setupProject(format, model.meta?.uuid)
 				if (!Project) throw new Error('Failed to load Animated Java Blueprint')
 
+				const name = pathToName(file.path, true)
+				Project.name = pathToName(name, false)
+				if (file.path && isApp && !file.no_file) {
+					Project.save_path = file.path
+				}
+
+				// Match Blockbench's project codec lifecycle for integrations that observe project loads.
+				Blockbench.dispatchEvent('load_project', { model, path: file.path })
 				this.parse!(model, file.path)
 
-				const name = pathToName(file.path, true)
 				if (file.path && isApp && !file.no_file) {
-					Project.name = pathToName(file.path, false)
-					Project.save_path = file.path
 					addRecentProject({
 						name,
 						path: file.path,
