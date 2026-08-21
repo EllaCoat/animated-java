@@ -2,52 +2,44 @@
 // - 選択中 keyframe (= .keyframe.selected) を mouseover した時に keyframe element の右側に popup mount
 // - popup 内は keyframeEasingsPopup.svelte (= 既存 easing UI + XYZ input)
 // - mouse が keyframe / popup の両方から離れた時に unmount (= 100ms grace で chatter 防止)
-// - blockbench-anim-ux (= 別 plugin) が居る場合は popout 子窓内でも動作する (= window.AnimUX 経由)
+// - blockbench-anim-ux (= 別 plugin) が居る場合は popout 子窓内でも動作する
 
 import { registerPatch } from 'blockbench-patch-manager'
 import { injectComponent } from 'svelte-patching-tools'
 import { activeProjectIsBlueprintFormat } from '../formats/blueprint'
 import KeyframeEasingsPopupSvelte from '../svelteComponents/keyframeEasingsPopup.svelte'
 import { isFirstKeyframe } from '../panels/easings/easings.svelte'
+import { subscribeAnimUxDocuments } from '../util/animUxTimeline'
 
-// blockbench-anim-ux (= sibling plugin) が公開する optional API。
-// 居ない場合は素の document.addEventListener にフォールバックする。
-type AnimUxExternal = {
-	version: string
-	addDocumentListener(
-		type: string,
-		fn: EventListenerOrEventListenerObject,
-		opts?: boolean | AddEventListenerOptions,
-	): () => void
-	getActivePopoutDocument(): Document | null
-}
-
-function getAnimUx(): AnimUxExternal | undefined {
-	return (window as unknown as { AnimUX?: AnimUxExternal }).AnimUX
-}
-
-// 親 document に直登録 + 必要なら popout 子窓にも attach する helper。
-// anim_ux 未 install / 旧 version (= addDocumentListener 未対応) でも害なく degrade する。
 function attachDocListener(
 	type: string,
 	fn: EventListenerOrEventListenerObject,
 	opts?: boolean | AddEventListenerOptions,
 ): () => void {
-	const animUx = getAnimUx()
-	if (animUx?.addDocumentListener) {
-		try {
-			return animUx.addDocumentListener(type, fn, opts)
-		} catch (e) {
-			console.warn('[AJ] AnimUX.addDocumentListener failed, fallback to document', e)
+	let attachedDocuments: Document[] = []
+
+	const detach = (): void => {
+		for (const ownerDocument of attachedDocuments) {
+			ownerDocument.removeEventListener(
+				type,
+				fn,
+				opts as boolean | EventListenerOptions | undefined,
+			)
 		}
+		attachedDocuments = []
 	}
-	document.addEventListener(type, fn, opts)
-	return (): void => {
-		try {
-			document.removeEventListener(type, fn, opts as boolean | EventListenerOptions | undefined)
-		} catch {
-			/* noop */
+
+	const unsubscribeDocuments = subscribeAnimUxDocuments(documents => {
+		detach()
+		attachedDocuments = [...new Set(documents)]
+		for (const ownerDocument of attachedDocuments) {
+			ownerDocument.addEventListener(type, fn, opts)
 		}
+	})
+
+	return (): void => {
+		unsubscribeDocuments()
+		detach()
 	}
 }
 
@@ -354,8 +346,8 @@ function applyToActiveInput(active: HTMLInputElement, delta: number): void {
 	// popup が popout 子窓に乗っている場合は parent realm の Event を投げると realm 不一致を踏むので、
 	// active 自身の owner realm の Event constructor を使う。
 	const ownerWin = active.ownerDocument?.defaultView
-	const EventCtor = (ownerWin?.Event as typeof Event | undefined) ?? Event
-	active.dispatchEvent(new EventCtor('input', { bubbles: true }))
+	const eventCtor = (ownerWin?.Event as typeof Event | undefined) ?? Event
+	active.dispatchEvent(new eventCtor('input', { bubbles: true }))
 }
 
 // event の発生元 document を割り出す helper。
@@ -371,7 +363,7 @@ function onAxisKeyCapture(e: KeyboardEvent): void {
 	// plain も含めて全部 capture で処理 (= type=text にしたので browser 標準 Arrow は無関係、
 	// 全 case で自前 getInterval が必要)
 	const active = getEventDocument(e).activeElement as HTMLInputElement | null
-	if (!active || !active.matches(`#${POPUP_ID} input[data-axis]`)) return
+	if (!active?.matches(`#${POPUP_ID} input[data-axis]`)) return
 
 	e.preventDefault()
 	e.stopPropagation()
@@ -383,7 +375,7 @@ function onAxisKeyCapture(e: KeyboardEvent): void {
 
 function onAxisWheelCapture(e: WheelEvent): void {
 	const active = getEventDocument(e).activeElement as HTMLInputElement | null
-	if (!active || !active.matches(`#${POPUP_ID} input[data-axis]`)) return
+	if (!active?.matches(`#${POPUP_ID} input[data-axis]`)) return
 	if (e.target !== active) return
 
 	e.preventDefault()
@@ -399,8 +391,7 @@ registerPatch({
 
 	apply: () => {
 		const cssDeletable = Blockbench.addCSS(POPUP_CSS)
-		// anim_ux 経由で attach すると popout 中の子窓 document にも自動で追従する。
-		// 未 install / 旧 version では document.addEventListener にフォールバック (= attachDocListener 内処理)。
+		// anim_ux の document stream に attach し、未 install 時は親 document へフォールバックする。
 		const detachOnMouseOver = attachDocListener('mouseover', onMouseOver, true)
 		const detachOnMouseOut = attachDocListener('mouseout', onMouseOut, true)
 		const detachOnAxisKey = attachDocListener('keydown', onAxisKeyCapture, true)

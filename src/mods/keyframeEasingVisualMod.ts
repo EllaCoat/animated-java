@@ -7,6 +7,7 @@
 import { registerPatch } from 'blockbench-patch-manager'
 import { activeProjectIsBlueprintFormat } from '../formats/blueprint'
 import EVENTS from '../util/events'
+import { subscribeAnimUxDocuments } from '../util/animUxTimeline'
 
 type EasingDir = 'in' | 'out' | 'inout'
 
@@ -80,17 +81,12 @@ function parseEasing(easing: string | undefined): { type: string; dir: EasingDir
 	return { type: m[2].toLowerCase(), dir: m[1].toLowerCase() as EasingDir }
 }
 
-// anim_ux v0.6+ が公開する popout 子窓 document。 popout 中は keyframe DOM が子窓側に
-// adoptNode 移植されるため、 親 document の querySelector では見つからない。 attach 中の
-// すべての document を順に探して最初に当たった要素に attribute を当てる。
-let popoutDoc: Document | null = null
-
-function getActiveDocs(): Document[] {
-	return popoutDoc ? [document, popoutDoc] : [document]
-}
+// popout 中は keyframe DOM が子窓側へ adoptNode 移植されるため、親 document の
+// querySelector では見つからない。現在の document stream を順に探して要素へ attribute を当てる。
+let activeDocuments: readonly Document[] = []
 
 function findKeyframeElement(uuid: string): HTMLElement | null {
-	for (const doc of getActiveDocs()) {
+	for (const doc of activeDocuments) {
 		const el = doc.querySelector<HTMLElement>(`.keyframe[id="${uuid}"]`)
 		if (el) return el
 	}
@@ -141,7 +137,7 @@ function findKeyframeByUuid(uuid: string): _Keyframe | undefined {
 // UPDATE_KEYFRAME_SELECTION が発火しないため event 経路では visual 更新されない (= reviewer 指摘 B6)。
 // addedNode 自身 + 子孫の .keyframe を再帰探索して個別 applyDataset で attribute 再付与する。
 function syncSubtreeKeyframes(root: Node): void {
-	if (!(root instanceof HTMLElement)) return
+	if (root.nodeType !== 1) return
 	if (root.classList?.contains('keyframe') && root.id) {
 		const kf = findKeyframeByUuid(root.id)
 		if (kf) applyDataset(kf)
@@ -153,62 +149,49 @@ function syncSubtreeKeyframes(root: Node): void {
 	})
 }
 
-// popout 子窓 document への CSS + MutationObserver attach 状態。 同時に複数子窓を想定しない
-// (= anim_ux は同時 1 子窓のみ) ため単一 slot で管理。
-interface PopoutAttach {
+interface DocumentAttach {
 	doc: Document
-	baseStyle: HTMLStyleElement
-	curveStyle: HTMLStyleElement
+	baseStyle?: HTMLStyleElement
+	curveStyle?: HTMLStyleElement
 	observer: MutationObserver
 }
-let popoutAttach: PopoutAttach | null = null
 
-function attachPopoutDoc(doc: Document): void {
-	if (popoutAttach?.doc === doc) return
-	if (popoutAttach) detachPopoutDoc()
-	// CSS は親 head 経由 (Blockbench.addCSS) では popout 子窓に伝播しないので、
-	// 子窓 head に直接 <style> を inject する。 親側は別途 Blockbench.addCSS で済んでいる。
-	const baseStyle = doc.createElement('style')
-	baseStyle.textContent = BASE_CSS
-	doc.head.appendChild(baseStyle)
-	const curveStyle = doc.createElement('style')
-	curveStyle.textContent = buildCurveCss()
-	doc.head.appendChild(curveStyle)
-	const observer = new MutationObserver(mutations => {
-		for (const m of mutations) {
-			for (const node of m.addedNodes) syncSubtreeKeyframes(node)
+let documentAttaches: DocumentAttach[] = []
+
+function detachDocuments(): void {
+	for (const attachment of documentAttaches) {
+		attachment.observer.disconnect()
+		attachment.baseStyle?.remove()
+		attachment.curveStyle?.remove()
+	}
+	documentAttaches = []
+	activeDocuments = []
+}
+
+function attachDocuments(documents: readonly Document[]): void {
+	detachDocuments()
+	for (const doc of new Set(documents)) {
+		if (!doc.body || !doc.head) continue
+		let baseStyle: HTMLStyleElement | undefined
+		let curveStyle: HTMLStyleElement | undefined
+		if (doc !== document) {
+			baseStyle = doc.createElement('style')
+			baseStyle.textContent = BASE_CSS
+			doc.head.appendChild(baseStyle)
+			curveStyle = doc.createElement('style')
+			curveStyle.textContent = buildCurveCss()
+			doc.head.appendChild(curveStyle)
 		}
-	})
-	observer.observe(doc.body, { childList: true, subtree: true })
-	popoutAttach = { doc, baseStyle, curveStyle, observer }
-	popoutDoc = doc
-	// popout 開いた瞬間に既に居る keyframe (= adoptNode 直後の DOM) を即時 sync
+		const observer = new MutationObserver(mutations => {
+			for (const mutation of mutations) {
+				for (const node of mutation.addedNodes) syncSubtreeKeyframes(node)
+			}
+		})
+		observer.observe(doc.body, { childList: true, subtree: true })
+		documentAttaches.push({ doc, baseStyle, curveStyle, observer })
+	}
+	activeDocuments = documentAttaches.map(attachment => attachment.doc)
 	refreshAllKeyframes()
-}
-
-function detachPopoutDoc(): void {
-	if (!popoutAttach) return
-	popoutAttach.observer.disconnect()
-	try {
-		popoutAttach.baseStyle.remove()
-	} catch {
-		/* noop */
-	}
-	try {
-		popoutAttach.curveStyle.remove()
-	} catch {
-		/* noop */
-	}
-	popoutAttach = null
-	popoutDoc = null
-}
-
-interface AnimUxAPI {
-	getActivePopoutDocument(): Document | null
-}
-
-interface PopoutEventDetail {
-	document: Document
 }
 
 registerPatch({
@@ -224,46 +207,14 @@ registerPatch({
 		)
 		const unsubProjectSelect = EVENTS.SELECT_AJ_PROJECT.subscribe(refreshAllKeyframes)
 
-		// BB が keyframe DOM を再描画する経路 (= 親 channel 再描画 / easing 変更 / animation 切替) で
-		// AJ 付与 attribute が消失する問題への補修。 addedNodes 内の .keyframe を子孫含めて再付与する。
-		// document.body 全体 subtree を監視するが、 .keyframe フィルタで処理を限定する。
-		const observer = new MutationObserver(mutations => {
-			for (const m of mutations) {
-				for (const node of m.addedNodes) syncSubtreeKeyframes(node)
-			}
-		})
-		observer.observe(document.body, { childList: true, subtree: true })
-
-		// anim_ux v0.6+ の popout event を listen。 popout 子窓には CSS / MutationObserver / dataset
-		// を別途 attach しないと easing の色変更と背景カーブが反映されない (= 親 document 経路は伝播しない)。
-		const onPopoutOpen = (e: Event): void => {
-			const detail = (e as CustomEvent<PopoutEventDetail>).detail
-			if (detail?.document) attachPopoutDoc(detail.document)
-		}
-		const onPopoutClose = (): void => {
-			detachPopoutDoc()
-			// popout 閉じた直後、 keyframe DOM が親 document に戻った後の再 sync
-			refreshAllKeyframes()
-		}
-		window.addEventListener('animux:popout-open', onPopoutOpen)
-		window.addEventListener('animux:popout-close', onPopoutClose)
-
-		// plugin 順序依存の安全弁 = AJ load 時点で既に popout 中の場合は event 来ない、
-		// anim_ux API 経由で現在状態を直接拾う。
-		const animux = (window as unknown as { AnimUX?: AnimUxAPI }).AnimUX
-		const existing = animux?.getActivePopoutDocument?.()
-		if (existing) attachPopoutDoc(existing)
-
-		refreshAllKeyframes()
+		const unsubscribeAnimUxDocuments = subscribeAnimUxDocuments(attachDocuments)
 
 		return {
 			baseCssDeletable,
 			curveCssDeletable,
 			unsubKeyframeSelection,
 			unsubProjectSelect,
-			observer,
-			onPopoutOpen,
-			onPopoutClose,
+			unsubscribeAnimUxDocuments,
 		}
 	},
 
@@ -272,25 +223,22 @@ registerPatch({
 		curveCssDeletable,
 		unsubKeyframeSelection,
 		unsubProjectSelect,
-		observer,
-		onPopoutOpen,
-		onPopoutClose,
+		unsubscribeAnimUxDocuments,
 	}) => {
-		window.removeEventListener('animux:popout-open', onPopoutOpen)
-		window.removeEventListener('animux:popout-close', onPopoutClose)
-		detachPopoutDoc()
-		observer.disconnect()
+		const documents = activeDocuments
+		unsubscribeAnimUxDocuments()
+		detachDocuments()
 		unsubKeyframeSelection()
 		unsubProjectSelect()
 		baseCssDeletable.delete()
 		curveCssDeletable.delete()
-		document
-			.querySelectorAll<HTMLElement>(
-				'.keyframe[data-aj-ease-type], .keyframe[data-aj-ease-dir]'
-			)
-			.forEach(el => {
+		for (const doc of documents) {
+			doc.querySelectorAll<HTMLElement>('.keyframe[data-aj-ease-type], .keyframe[data-aj-ease-dir]').forEach(
+			el => {
 				delete el.dataset.ajEaseType
 				delete el.dataset.ajEaseDir
-			})
+			}
+		)
+		}
 	},
 })
