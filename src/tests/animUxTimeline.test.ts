@@ -36,7 +36,7 @@ describe('subscribeAnimUxDocuments', () => {
 		vi.stubGlobal('Blockbench', blockbench)
 		vi.stubGlobal('AnimUX', undefined)
 
-		const documents: readonly Document[][] = []
+		const documents: Array<readonly Document[]> = []
 		const unsubscribe = subscribeAnimUxDocuments(current => documents.push([...current]))
 
 		const popoutDocument = {} as Document

@@ -132,17 +132,18 @@ function findKeyframeByUuid(uuid: string): _Keyframe | undefined {
 	return undefined
 }
 
-// MutationObserver の addedNodes に直接 .keyframe が来るとは限らず、 BB が channel 親要素ごと
-// 再描画した場合は親 element が addedNodes に入る (= reviewer 指摘 B3)。 加えて easing 変更時は
-// UPDATE_KEYFRAME_SELECTION が発火しないため event 経路では visual 更新されない (= reviewer 指摘 B6)。
+// MutationObserver の addedNodes に直接 .keyframe が来るとは限らず、BB が channel 親要素ごと
+// 再描画した場合は親 element が addedNodes に入る。加えて easing 変更時は
+// UPDATE_KEYFRAME_SELECTION が発火しないため、event 経路では visual 更新されない。
 // addedNode 自身 + 子孫の .keyframe を再帰探索して個別 applyDataset で attribute 再付与する。
 function syncSubtreeKeyframes(root: Node): void {
 	if (root.nodeType !== 1) return
-	if (root.classList?.contains('keyframe') && root.id) {
-		const kf = findKeyframeByUuid(root.id)
+	const element = root as Element
+	if (element.classList.contains('keyframe') && element.id) {
+		const kf = findKeyframeByUuid(element.id)
 		if (kf) applyDataset(kf)
 	}
-	root.querySelectorAll?.<HTMLElement>('.keyframe').forEach(child => {
+	element.querySelectorAll<HTMLElement>('.keyframe').forEach(child => {
 		if (!child.id) return
 		const kf = findKeyframeByUuid(child.id)
 		if (kf) applyDataset(kf)
