@@ -11,6 +11,7 @@ import { localize as translate } from '../../util/lang'
 import { sanitizeStorageKey } from '../../util/minecraftUtil'
 import { Variant } from '../../variants'
 import { upgradeAnimatedJavaBlueprint } from './dfu'
+import { groupsReferencedByOutliner } from './outlinerGroups'
 import * as blueprintSettings from './settings'
 
 // region Codec
@@ -150,7 +151,10 @@ export const BLUEPRINT_CODEC = registerDeletableHandlerPatch({
 				}
 
 				if (model.groups) {
-					for (const template of model.groups) {
+					for (const template of groupsReferencedByOutliner(
+						model.groups,
+						model.outliner
+					)) {
 						// @ts-expect-error - missing UUID arg
 						new Group(template, template.uuid).init()
 					}
@@ -291,13 +295,15 @@ export const BLUEPRINT_CODEC = registerDeletableHandlerPatch({
 					model.elements.push(element.getSaveCopy?.(!!model.meta))
 				}
 
+				const outliner = Outliner.toJSON()
+
 				model.groups = []
-				for (const group of Group.all) {
+				for (const group of groupsReferencedByOutliner(Group.all, outliner)) {
 					// @ts-expect-error - missing arg
 					model.groups.push(group.getSaveCopy(false))
 				}
 
-				model.outliner = Outliner.toJSON()
+				model.outliner = outliner
 
 				model.textures = []
 				for (const texture of Texture.all) {
