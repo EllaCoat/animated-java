@@ -4,7 +4,7 @@
 	"title": "Animated Java (TSB)",
 	"icon": "icon.svg",
 	"description": "Effortlessly craft complex animations for Minecraft: Java Edition",
-	"version": "1.10.2",
+	"version": "1.10.3",
 	"min_blockbench_version": "5.1.4",
 	"variant": "desktop",
 	"tags": [
