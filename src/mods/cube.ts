@@ -1,7 +1,6 @@
 import { overrideAccessors, registerPatch } from 'blockbench-patch-manager'
 import { activeProjectIsBlueprintFormat, projectTargetVersionIsAtLeast } from '../formats/blueprint'
 import { isCubeValid } from '../systems/util'
-import { localize as translate } from '../util/lang'
 
 declare global {
 	// @ts-expect-error - Broken BB types
@@ -23,33 +22,6 @@ function updateCubeValidity(cube: Cube, isValid: boolean) {
 	if (cube.isRotationValid === isValid) return
 	cube.mesh.outline.material = isValid ? Canvas.outlineMaterial : ERROR_OUTLINE_MATERIAL
 	cube.isRotationValid = isValid
-}
-
-let toastNotification: Deletable | null = null
-
-function showToastNotification() {
-	if (!toastNotification) {
-		toastNotification = Blockbench.showToastNotification({
-			text: translate(
-				projectTargetVersionIsAtLeast('1.21.6')
-					? 'toast.invalid_rotations_post_1_21_6'
-					: 'toast.invalid_rotations'
-			),
-			color: 'var(--color-error)',
-			click: () => false,
-		})
-		const intervalId = setInterval(() => {
-			if (
-				Cube.all.some(cube => isCubeValid(cube) === 'invalid') &&
-				document.querySelector('li.toast_notification')
-			)
-				return
-			clearInterval(intervalId)
-			toastNotification?.delete()
-			toastNotification = null
-			requestAnimationFrame(updateAllCubeOutlines)
-		}, 1000)
-	}
 }
 
 registerPatch({
@@ -75,7 +47,6 @@ registerPatch({
 					}
 					case 'invalid': {
 						updateCubeValidity(cube, false)
-						showToastNotification()
 						break
 					}
 				}
