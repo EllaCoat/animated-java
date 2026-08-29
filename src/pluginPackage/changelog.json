@@ -880,22 +880,5 @@
 				]
 			}
 		]
-	},
-	"1.10.3": {
-		"title": "v1.10.3",
-		"author": "EllaCoat",
-		"date": "2026-08-29",
-		"categories": [
-			{
-				"title": "Changes",
-				"list": ["Removed the recurring invalid cube rotation popup from the editor."]
-			},
-			{
-				"title": "Fixes",
-				"list": [
-					"Invalid cube rotations remain outlined in red without interrupting the editor."
-				]
-			}
-		]
 	}
 }
