@@ -17,6 +17,7 @@ import { sanitizeStorageKey } from '../../util/minecraftUtil'
 import { Variant } from '../../variants'
 import { BLUEPRINT_CODEC } from './codec'
 import FormatPageSvelte from './formatPage.svelte'
+import { rotationConstraintsAreSuspended } from './rotationConstraintGuard'
 import type { BlueprintSettings } from './settings'
 import * as blueprintSettings from './settings'
 
@@ -453,6 +454,10 @@ export function updateRotationConstraints() {
 	const format = BLUEPRINT_FORMAT.get()!
 	if (!format) {
 		console.error('Animated Java Blueprint format is not registered!')
+		return
+	}
+	if (rotationConstraintsAreSuspended()) {
+		format.rotation_limit = false
 		return
 	}
 
